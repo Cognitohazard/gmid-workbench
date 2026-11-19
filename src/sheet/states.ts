@@ -469,6 +469,13 @@ export type WithheldOn =
       readonly cause?: undefined;
       /** The block's own params whose value from the parent gives no number. */
       readonly inputs?: readonly string[];
+    })
+  /** An item of the design point's list, named as that list names it, with the kind of its cause:
+   *  a range end that is not calculated waits on the design point, which gives no design. A
+   *  pointer only; the item's own data is read in the design point's list. */
+  | (ItemRef & {
+      readonly frame: 'design';
+      readonly cause: CauseName;
     });
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────
@@ -477,8 +484,14 @@ export type WithheldOn =
  * The choices not yet ruled on, in one place, so that each is a change here alone:
  *  - `equationOnly`: the verdict of a sheet that sizes no device and solves nothing, where every
  *    item is ok. It has no design to be feasible; "feasible" stands until its word is ruled.
+ *  - `unreadValue`: what a failed or withheld value that no requirement and no output reads
+ *    (unreadValues) does to the verdict: it makes it undetermined, as every failed item does, or
+ *    it only shows as not calculated and decides nothing. Undetermined stands until it is ruled.
  */
-export const OPEN_RULINGS: { readonly equationOnly: DesignVerdict } = { equationOnly: 'feasible' };
+export const OPEN_RULINGS: {
+  readonly equationOnly: DesignVerdict;
+  readonly unreadValue: 'undetermined' | 'not-calculated';
+} = { equationOnly: 'feasible', unreadValue: 'undetermined' };
 
 /**
  * The cause of a search that found no solution in what it searched, from its data — where its
@@ -590,11 +603,58 @@ export type HeldVerdict = 'no-operating-point' | 'non-compliant' | 'compliant' |
  *  that decide it; for an undetermined one, every failed item. */
 export interface Verdict<V extends string = DesignVerdict> {
   readonly verdict: V;
-  readonly failed: readonly (ItemRef & { readonly cause: Cause })[];
+  /** Each failed item the verdict rests on. One of a range end's own list carries the end's name
+   *  (`end`), as it is not in the design point's list. */
+  readonly failed: readonly (ItemRef & { readonly cause: Cause; readonly end?: string })[];
   /** The solved params the run held instead of solving, where any was: the reason the verdict is
    *  undetermined. */
   readonly held?: readonly ItemRef[];
 }
+
+/**
+ * The causes a failed item may carry while its number is still in place, so that a reader may take
+ * it: a design that rests on a level the sheet marks as assumed was calculated on that value. One
+ * table, read by `hasNumber` alone.
+ */
+export const NUMBER_IN_PLACE: readonly { readonly kind: CauseName; readonly why?: string }[] = [
+  { kind: 'not-determined', why: 'assumed-level' },
+];
+
+/** The kinds of item that hold a number another item reads. A requirement holds none: what it
+ *  could not say is the verdict's business, and a reader of its margin reads its own status. */
+const HOLDS_NUMBER: ReadonlySet<ItemKind> = new Set(['value', 'device', 'search', 'sheet']);
+
+/** Whether an item's number is there: it is ok, or failed with a cause that leaves its number in
+ *  place (NUMBER_IN_PLACE). A value that reads a name no entry declares has none. */
+export const hasNumber = (i: Item): boolean =>
+  i.status === 'ok' ||
+  (i.status === 'failed' &&
+    NUMBER_IN_PLACE.some(
+      (c) =>
+        c.kind === i.cause.kind &&
+        (c.why === undefined || (i.cause.data as { why?: string }).why === c.why),
+    ));
+
+/** The items whose number a run does not have: each value, device, search or sheet item that is
+ *  withheld, or failed with a cause that leaves no number (hasNumber). Empty where the run is
+ *  complete. */
+export const incompleteOn = (items: readonly Item[]): Item[] =>
+  items.filter((i) => HOLDS_NUMBER.has(i.kind) && !hasNumber(i));
+
+/** Whether a requirement's own margin may be read: it holds, or it fails on the numbers it has. A
+ *  requirement that gives no number, is not read or is withheld has no margin to show. The one rule
+ *  every reader of a requirement's margin applies, beside the point's verdict and its completeness. */
+export const marginReadable = (i: Item): boolean =>
+  i.kind === 'requirement' &&
+  (i.status === 'ok' || (i.status === 'failed' && i.cause.kind === 'fails'));
+
+/** Whether every number of a run is there, from its items (incompleteOn). It answers completeness,
+ *  not what the design is: a run where a hard requirement fails and a search also fails reads
+ *  non-compliant, and is not complete; one on an assumed level is complete, and undetermined. A
+ *  reader that takes numbers from a run reads this; one that takes a requirement's margin also reads
+ *  the verdict and that requirement's own status. */
+export const isComplete = (res: { items?: readonly Item[] }): boolean =>
+  res.items !== undefined && incompleteOn(res.items).length === 0;
 
 /** Whether an item is a solved param the run held at a given value instead of solving. */
 export const isHeld = (i: Item): boolean => i.status === 'ok' && i.attributes?.kind === 'held';
@@ -618,15 +678,28 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
  * not known. The sheet is an item, so a sheet that was not read cannot reach rule 3. Withheld items
  * follow from failed ones, which the list already holds.
  */
-export function verdictOf(items: readonly Item[]): Verdict {
-  const failed = failedItems(items);
+export function verdictOf(items: readonly Item[], unread: ReadonlySet<string> = NONE): Verdict {
+  const counted = items.filter((i) => !onlyNotCalculated(i, unread));
+  const failed = failedItems(counted);
   for (const rule of VERDICT_RULES) {
-    const v = rule(items, failed);
+    const v = rule(counted, failed);
     if (v) return v;
   }
   // An advisory requirement that does not hold decides nothing (see failsCause).
   return { verdict: 'undetermined', failed: blocking(failed) };
 }
+
+const NONE: ReadonlySet<string> = new Set();
+
+/** Whether an item only shows as not calculated and decides nothing (OPEN_RULINGS.unreadValue): a
+ *  value of the sheet's own that is not ok and that no requirement and no output reads (`unread`,
+ *  see unreadValues). Never, until that is ruled. */
+const onlyNotCalculated = (i: Item, unread: ReadonlySet<string>): boolean =>
+  OPEN_RULINGS.unreadValue === 'not-calculated' &&
+  i.kind === 'value' &&
+  i.path.length === 0 &&
+  i.status !== 'ok' &&
+  unread.has(i.name);
 
 type Failed = (ItemRef & { cause: Cause })[];
 type VerdictRule = (items: readonly Item[], failed: Failed) => Verdict | undefined;
@@ -669,9 +742,65 @@ const okRule: VerdictRule = (items, failed) =>
  *  open ruling, and this order is the one line that holds it. */
 const VERDICT_RULES: readonly VerdictRule[] = [heldRule, provedRule, failsRule, okRule];
 
+/** A range end's list, by the end's name (RangeEndReport). */
+export interface EndList {
+  readonly name: string;
+  readonly items?: readonly Item[];
+}
+
+/** Whether a range end was not calculated because its own entry failed: its list is its one sheet
+ *  item, failed. */
+/**
+ * The sheet item of a range end's own list where the end's own entry is not well formed: the item
+ * of kind sheet with no path, wherever it is in the list, failed with a finding of validation, or
+ * with a `set` expression that does not parse (cannot-evaluate, `syntax`, with `rangeEnd`), the one
+ * case where the evaluation's more specific cause replaces validation's. Undefined where the entry
+ * is well formed: a `set` that gives no number at this design is the end's own business, as when it
+ * reads a device beyond its table. The one rule the sheet's verdict and its feasibility both read.
+ */
+export function endEntryNotWellFormed(
+  items: readonly Item[] | undefined,
+): (Item & { status: 'failed' }) | undefined {
+  for (const i of items ?? []) {
+    if (i.kind !== 'sheet' || i.path.length || i.status !== 'failed') continue;
+    const c = i.cause;
+    const validated =
+      (c.kind === 'not-read' || c.kind === 'not-determined') && c.data.stage === 'validation';
+    const syntax =
+      c.kind === 'cannot-evaluate' && c.data.why === 'syntax' && c.data.rangeEnd !== undefined;
+    if (validated || syntax) return i;
+  }
+  return undefined;
+}
+
+/**
+ * The verdict of a sheet, from the design point's list and its range ends' lists: verdictOf of the
+ * design point, then one rule after "a requirement fails": a range end whose own entry is not well
+ * formed (endEntryNotWellFormed) leaves the verdict undetermined, and `failed` names that end's sheet item with the end's name.
+ * The sheet carries the end, so it is not feasible while the end's entry is not well formed; the
+ * design point itself was calculated, so its list holds no copy of the finding.
+ */
+export function sheetVerdictOf(
+  design: readonly Item[],
+  ends: readonly EndList[],
+  unread: ReadonlySet<string> = NONE,
+): Verdict {
+  const v = verdictOf(design, unread);
+  if (v.verdict === 'infeasible' || v.verdict === 'non-compliant') return v;
+  const own = ends.flatMap((e) => {
+    const i = endEntryNotWellFormed(e.items);
+    return i ? [{ kind: 'sheet' as const, path: [], name: '', cause: i.cause, end: e.name }] : [];
+  });
+  if (!own.length) return v;
+  return { ...v, verdict: 'undetermined', failed: [...v.failed, ...own] };
+}
+
 /** The verdict of a held point: verdictOf, in the words a held design is asked in. */
-export function heldVerdictOf(items: readonly Item[]): Verdict<HeldVerdict> {
-  const v = verdictOf(items);
+export function heldVerdictOf(
+  items: readonly Item[],
+  unread: ReadonlySet<string> = NONE,
+): Verdict<HeldVerdict> {
+  const v = verdictOf(items, unread);
   const word: Record<DesignVerdict, HeldVerdict> = {
     infeasible: 'no-operating-point',
     'non-compliant': 'non-compliant',

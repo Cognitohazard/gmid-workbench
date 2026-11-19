@@ -79,9 +79,10 @@ import {
 import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
   noSolutionCause,
-  verdictOf,
   type Cause,
+  type HeldVerdict,
   type Item,
+  type Verdict,
   type ItemRef,
   type RelationField,
   type SearchData,
@@ -93,7 +94,10 @@ import {
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { failOn, solveFailureOf } from './derived';
 import {
+  designVerdict,
+  endVerdict,
   itemsOf,
+  notCalculated,
   resolveWithheld,
   searchItems,
   under,
@@ -2299,7 +2303,14 @@ export function evaluateSheet(
           }
         : i,
     );
-    return { values: {}, checks: [], feasible: false, warnings, items, verdict: verdictOf(items) };
+    return {
+      values: {},
+      checks: [],
+      feasible: false,
+      warnings,
+      items,
+      verdict: designVerdict(undefined, items),
+    };
   }
   // A device whose wires put its gate on its drain is diode-connected, and is sized on the
   // diode diagonal like one that says so (see structuralDiodes) — stated before anything sizes.
@@ -2401,6 +2412,13 @@ function evaluateNode(
     .map((p) => p.name);
   const solved = held.length ? withHeldMarks(doc, { ...solvedRun, pinned: held }, held) : solvedRun;
   if (depth > 0) return solved;
+  // A held run's result carries its held verdict, written by the function that writes a range
+  // end's: a held centre and its ends are separate points, each read from its own list.
+  const top = (r: SheetResult): SheetResult => {
+    if (opts.held !== true) return r;
+    const heldVerdict = endVerdict(r.items, doc);
+    return heldVerdict ? { ...r, heldVerdict } : r;
+  };
   const heldGates = opts.held ? heldGateWarnings(doc) : [];
   const pinnedNote = pinnedWarnings(solved);
   const res =
@@ -2415,19 +2433,21 @@ function evaluateNode(
     // selectorsBeyondTable).
     const unwalked = withoutWalk(doc, finishWiring(res, false, settings, keepPoint));
     const selectors = selectorsBeyondTable(doc, res);
-    if (!selectors.length) return withItems(doc, { ...unwalked, point }, opts.assumed);
-    return withItems(
-      doc,
-      {
-        ...unwalked,
-        warnings: [...unwalked.warnings, ...selectors],
-        feasible: false,
-        ...(unwalked.nodes
-          ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
-          : {}),
-        point,
-      },
-      opts.assumed,
+    if (!selectors.length) return top(withItems(doc, { ...unwalked, point }, opts.assumed));
+    return top(
+      withItems(
+        doc,
+        {
+          ...unwalked,
+          warnings: [...unwalked.warnings, ...selectors],
+          feasible: false,
+          ...(unwalked.nodes
+            ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
+            : {}),
+          point,
+        },
+        opts.assumed,
+      ),
     );
   }
   const out = withNodes(
@@ -2440,16 +2460,18 @@ function evaluateNode(
   // The point was classified before the wiring was read; a selector the table contradicts then
   // leaves the run infeasible, so a centre that complied does not.
   const raised = out.warnings.slice(res.warnings.length).find((w) => w.severity === 'error');
-  return withItems(
-    doc,
-    {
-      ...out,
-      point:
-        raised && point.state === 'complies'
-          ? { ...point, state: 'does-not-comply', error: raised.message }
-          : point,
-    },
-    opts.assumed,
+  return top(
+    withItems(
+      doc,
+      {
+        ...out,
+        point:
+          raised && point.state === 'complies'
+            ? { ...point, state: 'does-not-comply', error: raised.message }
+            : point,
+      },
+      opts.assumed,
+    ),
   );
 }
 
@@ -2483,7 +2505,7 @@ const withItems = (
     else if (items[at].status === 'ok') items[at] = failed;
   }
   const resolved = resolveWithheld(items);
-  return { ...res, items: resolved, verdict: verdictOf(resolved) };
+  return { ...res, items: resolved, verdict: designVerdict(doc, resolved) };
 };
 
 /** The items of a run with each solved param it held at a given value marked so: the value it
@@ -2508,7 +2530,7 @@ function withHeldMarks(doc: SheetDoc, res: SheetResult, held: readonly string[])
       },
     };
   });
-  return { ...res, items, verdict: verdictOf(items) };
+  return { ...res, items, verdict: designVerdict(doc, items) };
 }
 
 /**
@@ -4164,7 +4186,8 @@ function evaluateWithRange(
     // failed solve did not find is withheld from them, and what is left was never landed on as a
     // design. Reporting the point that would have been asked about from those is reporting a
     // phantom, the same reason a failed solve's probe is never reported as a landing.
-    return { ...base, rangeEnds: rangeEnds.map((e) => unrunEnd(e.name, 'not-run')) };
+    const items = notCalculated(base.items ?? []);
+    return { ...base, rangeEnds: rangeEnds.map((e) => unrunEnd(e.name, 'not-run', { items })) };
   }
   // A design resting on an assumed voltage has no answer at a range end: holding a typed guess
   // fixed while the range moves around it measures the guess. Asked, and declined with the
@@ -4173,16 +4196,31 @@ function evaluateWithRange(
   if (assumed.length) {
     const error = assumedLevelRefusal(assumed);
     const nodes = unwalkedReport(doc);
+    const items = notCalculated(base.items ?? []);
     const reports = rangeEnds.map((e) =>
-      unrunEnd(e.name, 'no-answer', { error, ...(nodes ? { nodes } : {}) }),
+      unrunEnd(e.name, 'no-answer', { error, ...(nodes ? { nodes } : {}), items }),
     );
     return { ...base, rangeEnds: reports, complies: false };
   }
   const held = holdHardware(doc, base);
   const settings = opts.settings ?? DEFAULT_SETTINGS;
   const reports = rangeEnds.map((e) => runRangeEnd(e, held, base, table, resolveDevice, settings));
-  return { ...base, rangeEnds: reports, complies: reports.every((r) => r.state === 'complies') };
+  return {
+    ...base,
+    rangeEnds: reports,
+    complies: reports.every((r) => r.state === 'complies'),
+    verdict: designVerdict(doc, base.items ?? [], reports),
+  };
 }
+
+/** A range end's verdict from its list (endVerdict), where the engine calculated the end. */
+export const withVerdict = (
+  items: readonly Item[] | undefined,
+  doc: SheetDoc,
+): { verdict?: Verdict<HeldVerdict> } => {
+  const verdict = endVerdict(items, doc);
+  return verdict ? { verdict } : {};
+};
 
 /** A range end's report with nothing evaluated in it: no outcomes, no landing, no warnings, and
  *  whatever `extra` says (an error, the point asked about, the wiring report) over that. */
@@ -4413,6 +4451,7 @@ function runRangeEnd(
     ...(res.ranges ? { ranges: res.ranges } : {}),
     warnings: res.warnings,
     ...(res.items ? { items: res.items } : {}),
+    ...withVerdict(res.items, held.doc),
     ...(err !== undefined ? { error: err } : {}),
     ...(outside.length ? { outside } : {}),
     ...(res.nodes ? { nodes: res.nodes } : {}),

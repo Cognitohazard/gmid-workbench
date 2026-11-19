@@ -25,6 +25,12 @@ import type { EntryAbout, FindingAbout, NetlistAbout, QAWarning } from '../types
 import { syntaxAt } from '../expr';
 import {
   failsCause,
+  endEntryNotWellFormed,
+  heldVerdictOf,
+  sheetVerdictOf,
+  type EndList,
+  type HeldVerdict,
+  type Verdict,
   type NotReadData,
   type RelationField,
   memberOf,
@@ -525,7 +531,7 @@ function resolveOn(items: readonly Item[], o: WithheldOn, depth = 0): WithheldOn
     if (inside && inside.status === 'failed')
       return { kind: inside.kind, path: inside.path, name: inside.name, cause: inside.cause.kind };
   }
-  return o.frame === 'parent' ? o : { ...ref, cause: o.cause };
+  return o.frame !== undefined ? o : { ...ref, cause: o.cause };
 }
 
 /** A check's two sides as the sheet writes them, read back from its text. */
@@ -1010,3 +1016,127 @@ export function withFindings(
   }
   return out;
 }
+
+/** Whether a validation finding is about the sheet as a whole rather than about an entry a run
+ *  evaluates: a finding of the netlist check, one about a decision, or one that names no entry. A
+ *  range end's list takes the findings about the entries its run evaluates (see runSheet); one
+ *  about the sheet as a whole is read in the design point's list. */
+export function aboutTheSheet(doc: SheetDoc | undefined, w: QAWarning): boolean {
+  if (w.about?.kind === 'netlist' || w.about?.kind === 'decision') return true;
+  const ref = aboutRef(doc, w) ?? locate(doc, w.location);
+  return ref.kind === 'sheet' && ref.path.length === 0;
+}
+
+/** The list of a range end the engine does not calculate, because the design point gives no
+ *  design: its one sheet item, withheld on each item of the design point's list that is failed
+ *  (other than a requirement that fails, which leaves the design standing) or held instead of
+ *  solved. */
+export function notCalculated(design: readonly Item[]): Item[] {
+  const on: WithheldOn[] = design.flatMap((i): WithheldOn[] => {
+    const ref = { kind: i.kind, path: i.path, name: i.name };
+    return i.status === 'failed' && i.cause.kind !== 'fails'
+      ? [{ ...ref, frame: 'design', cause: i.cause.kind }]
+      : [];
+  });
+  return [{ kind: 'sheet', path: [], name: '', status: 'withheld', on }];
+}
+
+/** Whether a run gives a number for one of its named results: the item of that name at the top of
+ *  the list is ok. A name with no item of its own, as a value a composed block provides is read by
+ *  its parent (`amp__gain`), is read from the run's withheld record. */
+export function givesValue(
+  res: Pick<SheetResult, 'items' | 'values' | 'withheld'>,
+  name: string,
+): boolean {
+  const own = res.items?.find(
+    (i) => i.path.length === 0 && i.name === name && (i.kind === 'value' || i.kind === 'search'),
+  );
+  if (own) return own.status === 'ok' && res.values[name] !== undefined;
+  return res.withheld?.[name] === undefined && res.values[name] !== undefined;
+}
+
+/** Every string a part of an entry holds, at any depth. */
+const stringsIn = (x: unknown): string[] =>
+  typeof x === 'string'
+    ? [x]
+    : Array.isArray(x)
+      ? x.flatMap(stringsIn)
+      : x !== null && typeof x === 'object'
+        ? Object.values(x).flatMap(stringsIn)
+        : [];
+
+/** The names an expression reads, or none where it does not parse. */
+const readsOf = (expr: string): readonly string[] => {
+  try {
+    return namesOf(expr);
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * The equations of a sheet that no requirement and no output reads, directly or through other
+ * equations: no check, no value it provides, no relation it solves or holds, no device, block,
+ * level, element, analysis or range end reads them. Whether such a value, where it fails or is
+ * withheld, makes the verdict undetermined or only shows as not calculated is not yet ruled
+ * (OPEN_RULINGS.unreadValue); this is the one place that says which values it is about.
+ */
+export function unreadValues(doc: SheetDoc | undefined): ReadonlySet<string> {
+  if (!doc || !Array.isArray(doc.equations)) return new Set();
+  const list = <T>(x: readonly T[] | undefined): readonly T[] => (Array.isArray(x) ? x : []);
+  const read = new Set<string>(list(doc.provides));
+  const sources: unknown[] = [
+    list(doc.checks).map((c) => [c?.lhs, c?.rhs]),
+    list(doc.params).map((p) => [p?.designConstraint, p?.solveFor, p?.hold]),
+    doc.givens,
+    list(doc.blocks).map((b) => b?.params),
+    doc.levels,
+    doc.elements,
+    doc.analyses,
+    list(doc.operatingRange).map((e) => e?.set),
+  ];
+  for (const text of stringsIn(sources)) for (const n of readsOf(text)) read.add(n);
+  // What a read equation reads is read too, as far as the equations go.
+  const byName = new Map(doc.equations.map((e) => [e?.name, e?.expr]));
+  const queue = [...read].filter((n) => byName.has(n));
+  while (queue.length) {
+    const expr = byName.get(queue.pop() as string);
+    for (const n of typeof expr === 'string' ? readsOf(expr) : [])
+      if (!read.has(n)) {
+        read.add(n);
+        if (byName.has(n)) queue.push(n);
+      }
+  }
+  return new Set(doc.equations.map((e) => e?.name).filter((n) => !read.has(n)));
+}
+
+/** Whether a list is the one of a range end the engine does not calculate because the design point
+ *  gives no design (notCalculated). */
+export const isNotCalculated = (items: readonly Item[]): boolean =>
+  items.length === 1 &&
+  items[0].status === 'withheld' &&
+  items[0].on.some((o) => o.frame === 'design');
+
+/** The verdict of a range end, from its list, held design's words (heldVerdictOf). Absent where the
+ *  engine did not calculate the end: its list is one sheet item that is not ok, withheld on the
+ *  design point (notCalculated) or failed because its `set` does not resolve; or its own entry is
+ *  not well formed (endEntryNotWellFormed), wherever its sheet item is in the list. */
+export function endVerdict(
+  items: readonly Item[] | undefined,
+  doc: SheetDoc | undefined,
+): Verdict<HeldVerdict> | undefined {
+  if (!items?.length) return undefined;
+  if (items.length === 1 && items[0].kind === 'sheet' && items[0].status !== 'ok') return undefined;
+  // An end whose own entry is not well formed is not calculated, though the engine ran it.
+  if (endEntryNotWellFormed(items)) return undefined;
+  return heldVerdictOf(items, unreadValues(doc));
+}
+
+/** The verdict of a sheet (sheetVerdictOf) from its document, its design point's list and its range
+ *  ends' lists: the one place a verdict of a sheet is formed, so the values no requirement and no
+ *  output reads (unreadValues) are always the document's own. */
+export const designVerdict = (
+  doc: SheetDoc | undefined,
+  design: readonly Item[],
+  ends: readonly EndList[] = [],
+): Verdict => sheetVerdictOf(design, ends, unreadValues(doc));

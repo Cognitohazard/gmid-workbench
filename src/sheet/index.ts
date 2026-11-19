@@ -4,6 +4,7 @@
 
 import type { DeviceTable, OutsideTable, QAWarning } from '../types';
 import {
+  PATH_SEP,
   RANGE_END_SEP,
   engineChecks,
   indexTreeResults,
@@ -33,9 +34,22 @@ import type {
 } from './types';
 import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
-import { evaluateSheet, inheritedPolarityWarnings, type DeviceResolver } from './eval';
-import { withFindings } from './items';
-import { verdictOf } from './states';
+import { evaluateSheet, inheritedPolarityWarnings, withVerdict, type DeviceResolver } from './eval';
+import {
+  aboutTheSheet,
+  designVerdict,
+  givesValue,
+  isNotCalculated,
+  notCalculated,
+  withFindings,
+} from './items';
+import {
+  isComplete,
+  marginReadable,
+  type DesignVerdict,
+  type HeldVerdict,
+  type Item,
+} from './states';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
@@ -124,10 +138,34 @@ const NO_VALUES: SheetResult = { values: {}, checks: [], feasible: false, warnin
 /** A named result at one evaluated sample, or null where the sample does not determine it (see
  *  SweepCurve): a value the evaluation withheld, or one that is not finite. */
 function sampleValue(res: SheetResult | undefined, name: string): number | null {
-  if (!res || res.withheld?.[name] !== undefined) return null;
+  if (!res || !givesValue(res, name)) return null;
   const v = res.values[name];
-  return v !== undefined && Number.isFinite(v) ? v : null;
+  return Number.isFinite(v) ? v : null;
 }
+
+/** The verdict of one evaluated sample, with validation's findings on its items as runSheet puts
+ *  them: the verdict a script that runs the same values reads. */
+const sampleVerdict = (
+  res: SheetResult,
+  findings: readonly QAWarning[],
+  doc: SheetDoc,
+): DesignVerdict => designVerdict(doc, sampleItems(res, findings, doc), res.rangeEnds).verdict;
+
+/** One sample's items with validation's findings on them, as runSheet puts them. */
+const sampleItems = (res: SheetResult, findings: readonly QAWarning[], doc: SheetDoc): Item[] =>
+  withFindings(res.items ?? [], findings, doc, 'validation');
+
+/** Which of a run's requirements, by the key its tree of check outcomes gives them (`cs.headroom`),
+ *  have a margin a reader may take (marginReadable). A run with no items reads every one. */
+const readableIn =
+  (items: readonly Item[] | undefined) =>
+  (key: string): boolean => {
+    if (!items) return true;
+    const own = items.find(
+      (i) => i.kind === 'requirement' && [...i.path, i.name].join(PATH_SEP) === key,
+    );
+    return own === undefined || marginReadable(own);
+  };
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a block's
@@ -160,25 +198,40 @@ export function runSheet(
   const bound = inheritedPolarityWarnings(r.doc, table, resolveDevice);
   // What validation found is on the items too, each on the entry it names: a finding about one
   // range end on the sheet item of that end's own list, which an end that was not run has too.
-  const endNames = new Set((r.doc.operatingRange ?? []).map((e) => e?.name));
+  const endNames = new Set(
+    (Array.isArray(r.doc.operatingRange) ? r.doc.operatingRange : []).map((e) => e?.name),
+  );
   const onEnd = (w: QAWarning): boolean =>
     w.rule === 'sheet-range' && w.location !== undefined && endNames.has(w.location);
+  // A finding about one range end is on that end's list alone; the sheet's verdict reads the ends'
+  // lists (sheetVerdictOf), so it is not feasible while the end's entry is not well formed.
   const items = withFindings(
     res.items ?? [],
     pre.filter((w) => !onEnd(w)),
     r.doc,
     'validation',
   );
+  // A range end's run evaluates the entries of the sheet, so its list takes validation's findings
+  // about them the way the design point's list does. A finding about the sheet as a whole is read in
+  // the design point's list; the end is then not calculated, as it is where the design point gives
+  // no design, so an end never reads compliant on a sheet with a validation error.
+  const errors = pre.filter((w) => w.severity === 'error' && !onEnd(w));
+  const entries = errors.filter((w) => !aboutTheSheet(r.doc, w));
+  const wholeSheet = errors.length > entries.length;
   const rangeEnds = res.rangeEnds?.map((e) => {
     const own = pre.filter((w) => w.severity === 'error' && onEnd(w) && w.location === e.name);
-    if (!own.length) return e;
+    const notRun = !e.items?.length || isNotCalculated(e.items) || wholeSheet;
+    if (!notRun && !own.length && !entries.length) return e;
     const list = withFindings(
-      e.items ?? [{ kind: 'sheet', path: [], name: '', status: 'ok' }],
-      own,
+      notRun
+        ? notCalculated(items)
+        : (e.items ?? [{ kind: 'sheet', path: [], name: '', status: 'ok' }]),
+      notRun ? own : [...own, ...entries],
       r.doc,
       'validation',
     );
-    return { ...e, items: list };
+    const { verdict: _verdict, ...rest } = e;
+    return { ...rest, items: list, ...withVerdict(list, r.doc) };
   });
   return {
     ...withValidation([...pre, ...bound], res),
@@ -186,7 +239,7 @@ export function runSheet(
     assumptions,
     ...(rangeEnds ? { rangeEnds } : {}),
     items,
-    verdict: verdictOf(items),
+    verdict: designVerdict(r.doc, items, rangeEnds),
   };
 }
 
@@ -252,11 +305,11 @@ const isMeasurable = (rr: CheckResult): boolean => measurable(rr.kind, rr.margin
  *  about how the minimum is taken. */
 function worstBy(
   checks: Iterable<[string, CheckResult]>,
-  keep: (rr: CheckResult) => boolean,
+  keep: (rr: CheckResult, id: string) => boolean,
 ): { id: string; marginPct: number } | undefined {
   let worst: { id: string; marginPct: number } | undefined;
   for (const [id, rr] of checks) {
-    if (!keep(rr)) continue;
+    if (!keep(rr, id)) continue;
     if (!worst || rr.marginPct < worst.marginPct) worst = { id, marginPct: rr.marginPct };
   }
   return worst;
@@ -265,24 +318,27 @@ function worstBy(
 /**
  * One number for "how much room does the held design have at this range end": the WORST
  * measurable hard-check margin anywhere in the range-end run's tree, clamped to the informative
- * range (see `clampMargin`). An end the design measurably fails without leaving check outcomes —
- * a held device that cannot carry its current there — reads -MARGIN_PCT_CAP, which the chart
- * clips at the bottom. An end with nothing left to measure reads its verdict as
- * 0 / -MARGIN_PCT_CAP.
+ * range (see `clampMargin`). An end that does not comply with nothing left to measure reads
+ * -MARGIN_PCT_CAP, which the chart clips at the bottom; a compliant one with nothing to measure, 0.
  *
- * An end that was NOT RUN, or that returned NO ANSWER, reads null — a gap in the curve, the same
- * shape a check that could not be computed takes. Nothing about the range was measured there, and
- * a bottom clip would put a failure on the chart that the engine never established.
+ * Only where the end's verdict is compliant or non-compliant and its run is complete (isComplete):
+ * an end that was not calculated, is undetermined, or whose run stopped short reads null — a gap
+ * in the curve, the same shape a check that could not be computed takes.
  */
 function rangeEndMargin(e: RangeEndReport): number | null {
-  if (e.state === 'not-run' || e.state === 'no-answer') return null;
-  if (e.error !== undefined) return -MARGIN_PCT_CAP;
-  const found = worstBy(treeCheckResults(e), isMeasurable);
+  // A margin is charted where the end's verdict says what the held design is there and every number
+  // of the end's run is there; elsewhere its checks were read where the run stopped.
+  const verdict = e.verdict?.verdict;
+  if ((verdict !== 'compliant' && verdict !== 'non-compliant') || !isComplete(e)) return null;
+  // The three conditions every reader of a requirement's margin applies: the verdict says what the
+  // design is, the run is complete, and the requirement itself holds or fails (marginReadable).
+  const readable = readableIn(e.items);
+  const found = worstBy(treeCheckResults(e), (rr, id) => isMeasurable(rr) && readable(id));
   const worst = found === undefined ? null : clampMargin(found.marginPct);
   // An end that DOES NOT COMPLY must never chart non-negative: hard `na` fails the run closed
   // while contributing no margin, so without this floor a passing sibling check could paint a
   // failing range end at +margin.
-  if (e.state !== 'complies' && (worst === null || worst >= 0)) return -MARGIN_PCT_CAP;
+  if (verdict !== 'compliant' && (worst === null || worst >= 0)) return -MARGIN_PCT_CAP;
   return worst ?? 0;
 }
 
@@ -355,6 +411,13 @@ export interface SweepSample {
   readonly res?: SheetResult;
   readonly feasible: boolean;
   readonly stands: boolean;
+  /** The sample's verdict, where the caller gives one: a design's (sampleVerdict) where the design is
+   *  sized at the sample, a held design's where it is held there. A pass window is where it is
+   *  feasible or compliant. A caller that gives none is read by `feasible`. */
+  readonly verdict?: DesignVerdict | HeldVerdict;
+  /** Whether every number of the sample is there (isComplete), where the caller says; else it is
+   *  read from the sample's result. */
+  readonly complete?: boolean;
 }
 
 /**
@@ -373,8 +436,8 @@ export function sweepOf(
   param: string,
   n: number,
   refs: SheetRefIndex | undefined,
-  sample: (doc: SheetDoc) => SweepSample,
-  probe?: (doc: SheetDoc) => SweepSample,
+  sample: (doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample,
+  probe?: (doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample,
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
@@ -385,6 +448,8 @@ export function sweepOf(
       checks: [],
       feasible: [],
       stands: [],
+      complete: [],
+      verdicts: [],
       outside: [],
       values: [],
     };
@@ -398,9 +463,18 @@ export function sweepOf(
   // sample, so validating it (e.g. a NaN default with a finite [min,max]) would force
   // every sample infeasible for a value no sample ever uses. Any finite stand-in works
   // structurally; min is one.
-  const blocked =
-    r.warnings.some((w) => w.severity === 'error') ||
-    validateSheet(withParams(r.doc, { [param]: v.min })).some((w) => w.severity === 'error');
+  const pre = [...r.warnings, ...validateSheet(withParams(r.doc, { [param]: v.min }))];
+  const blocked = pre.some((w) => w.severity === 'error');
+  const findings = pre;
+  /** Whether a sample's numbers are all there: as the caller says, else from its result. */
+  const completeAt = (s: SweepSample): boolean =>
+    s.complete ?? (s.res !== undefined && isComplete(s.res));
+  /** Whether a sample passes: its verdict is feasible or compliant and it is complete, where the
+   *  caller gives a verdict. */
+  const passes = (s: SweepSample): boolean =>
+    s.verdict !== undefined
+      ? (s.verdict === 'feasible' || s.verdict === 'compliant') && completeAt(s)
+      : !blocked && s.feasible;
   const checks: SheetSweepCheck[] = [];
   collectTreeChecks(r.doc, '', checks);
   // Each range end rides the sweep as ONE aggregate curve: the held design's worst hard-check
@@ -420,6 +494,9 @@ export function sweepOf(
   }));
   const x: number[] = [];
   const feasible: boolean[] = [];
+  const passed: boolean[] = [];
+  const verdicts: (DesignVerdict | HeldVerdict | null)[] = [];
+  const complete: boolean[] = [];
   const stood: boolean[] = [];
   const beyond: OutsideTable[][] = [];
   // One curve per named result (namedResults): the sheet's equations and solved values from the
@@ -431,26 +508,36 @@ export function sweepOf(
         curves.set(name, { name, unit: unit ?? '', y: Array<number | null>(filled).fill(null) });
   };
   addNamed(NO_VALUES, 0);
-  /** The hard checks failing in one run's own outcomes, by the ids the sweep's curves carry. */
-  const failingIn = (byPath: ReadonlyMap<string, CheckResult>): string[] =>
-    checks.flatMap((c) => {
+  /** The hard checks failing in one run's own outcomes, by the ids the sweep's curves carry: each one
+   *  whose margin may be read (marginReadable). */
+  const failingIn = (
+    byPath: ReadonlyMap<string, CheckResult>,
+    items: readonly Item[] | undefined,
+  ): string[] => {
+    const readable = readableIn(items);
+    return checks.flatMap((c) => {
       const rr = byPath.get(c.id);
-      return rr && isFailing(rr) ? [c.id] : [];
+      return rr && isFailing(rr) && readable(c.id) ? [c.id] : [];
     });
+  };
   /** Each sample's failing hard checks, kept where windows are asked for (see windowsOf). */
   const failedAt: string[][] = [];
 
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
     x.push(t);
-    const { res, feasible: ok, stands: done } = sample(withParams(r.doc, { [param]: t }));
+    const s = sample(withParams(r.doc, { [param]: t }), findings);
+    const { res, feasible: ok, stands: done } = s;
     feasible.push(!blocked && ok);
+    passed.push(passes(s));
+    verdicts.push(s.verdict ?? null);
+    complete.push(completeAt(s));
     beyond.push(res ? outsideIn(res) : []);
     if (res) addNamed(res, i);
     for (const c of curves.values()) c.y.push(sampleValue(res, c.name));
     const byPath = new Map<string, CheckResult>();
     if (res) indexTreeResults(res.checks, res.blocks, '', byPath);
-    if (probe) failedAt.push(failingIn(byPath));
+    if (probe) failedAt.push(failingIn(byPath, res?.items));
     for (const rl of checks) {
       const rr = byPath.get(rl.id);
       rl.marginPct.push(
@@ -472,20 +559,22 @@ export function sweepOf(
     checks: [...checks, ...rangeEndChecks],
     feasible,
     stands: stood,
+    complete,
+    verdicts,
     outside: beyond,
     values: [...curves.values()],
   };
   if (!probe) return out;
   const at = (t: number): { ok: boolean; failing: string[]; outside: OutsideTable[] } => {
-    if (blocked) return { ok: false, failing: [], outside: [] };
-    const s = probe(withParams(r.doc, { [param]: t }));
+    const s = probe(withParams(r.doc, { [param]: t }), findings);
+    if (s.verdict === undefined && blocked) return { ok: false, failing: [], outside: [] };
     return {
-      ok: s.feasible,
-      failing: s.res ? failingIn(ownChecks(s.res)) : [],
+      ok: passes(s),
+      failing: s.res ? failingIn(ownChecks(s.res), s.res.items) : [],
       outside: s.res ? outsideIn(s.res) : [],
     };
   };
-  return { ...out, windows: windowsOf(x, feasible, failedAt, beyond, at) };
+  return { ...out, windows: windowsOf(x, passed, failedAt, beyond, at) };
 }
 
 /** Halvings that pin a window's edge between two samples: 2^-8 of their spacing, about a
@@ -558,9 +647,16 @@ export function sweepSheet(
   refs?: SheetRefIndex,
   opts: SweepOptions = {},
 ): SheetSweep {
-  const sample = (d: SheetDoc): SweepSample => {
+  const sample = (d: SheetDoc, findings: readonly QAWarning[]): SweepSample => {
     const res = evaluateSheet(d, table, resolveDevice, { settings: opts.settings });
-    return { res, feasible: res.feasible, stands: stands(res) };
+    const items = sampleItems(res, findings, d);
+    return {
+      res,
+      feasible: res.feasible,
+      stands: stands(res),
+      verdict: designVerdict(d, items, res.rangeEnds).verdict,
+      complete: isComplete({ items }),
+    };
   };
   // Feasibility never reads a range end, so an edge is pinned without them: one evaluation a probe.
   return sweepOf(
@@ -569,7 +665,7 @@ export function sweepSheet(
     n,
     refs,
     sample,
-    opts.windows ? (d) => sample(withoutRange(d)) : undefined,
+    opts.windows ? (d, findings) => sample(withoutRange(d), findings) : undefined,
   );
 }
 
@@ -621,6 +717,7 @@ export function sweepSheet2(
     x: [],
     y: [],
     feasible: [],
+    verdicts: [],
     binding: [],
     outside: [],
   };
@@ -633,15 +730,17 @@ export function sweepSheet2(
     withParams(swept, { [paramX]: vx, [paramY]: vy });
   // Validated WITH its range: the map does not evaluate the range ends, but a sheet whose range
   // is structurally broken is a broken sheet, and every other entry point refuses it.
-  const blocked =
-    r.warnings.some((w) => w.severity === 'error') ||
-    validateSheet(withParams(r.doc, { [paramX]: px.min, [paramY]: py.min })).some(
-      (w) => w.severity === 'error',
-    );
+  const pre = [
+    ...r.warnings,
+    ...validateSheet(withParams(r.doc, { [paramX]: px.min, [paramY]: py.min })),
+  ];
+  const blocked = pre.some((w) => w.severity === 'error');
+  const findings = pre;
 
   const x = Array.from({ length: pts }, (_, i) => px.min + ((px.max - px.min) * i) / (pts - 1));
   const y = Array.from({ length: pts }, (_, i) => py.min + ((py.max - py.min) * i) / (pts - 1));
   const feasible: boolean[][] = [];
+  const verdicts: DesignVerdict[][] = [];
   const binding: (string | null)[][] = [];
   const beyond: OutsideTable[][][] = [];
   const asked = opts.value;
@@ -651,6 +750,7 @@ export function sweepSheet2(
 
   for (let yi = 0; yi < pts; yi++) {
     const frow: boolean[] = [];
+    const vrow: DesignVerdict[] = [];
     const brow: (string | null)[] = [];
     const orow: OutsideTable[][] = [];
     const zrow: (number | null)[] = [];
@@ -658,11 +758,14 @@ export function sweepSheet2(
       const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice, {
         settings: opts.settings,
       });
+      const cell = overrideTwo(x[xi], y[yi]);
+      const verdict = sampleVerdict(res, findings, cell);
       frow.push(!blocked && res.feasible);
+      vrow.push(verdict);
       // Name the binding check — null when the cell is feasible, and also when
       // infeasibility came from something other than a failing check (sizing error, child
       // structural error), which bindingCheck reports as "no check to name".
-      brow.push(res.feasible ? null : (bindingCheck(res)?.id ?? null));
+      brow.push(verdict === 'feasible' ? null : (bindingCheck(res)?.id ?? null));
       orow.push(outsideIn(res));
       if (asked !== undefined) {
         named ??= namedResults(r.doc, res).find((n) => n.name === asked);
@@ -670,6 +773,7 @@ export function sweepSheet2(
       }
     }
     feasible.push(frow);
+    verdicts.push(vrow);
     binding.push(brow);
     beyond.push(orow);
     if (asked !== undefined) z.push(zrow);
@@ -679,6 +783,7 @@ export function sweepSheet2(
     x,
     y,
     feasible,
+    verdicts,
     binding,
     outside: beyond,
     ...(asked === undefined

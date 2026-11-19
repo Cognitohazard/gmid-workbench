@@ -3,7 +3,14 @@
 // reads them.
 
 import { causeMessage } from './describe';
-import { setOf, withoutSet, type Cause, type Item, type NoSolutionRead } from './states';
+import {
+  endEntryNotWellFormed,
+  setOf,
+  withoutSet,
+  type Cause,
+  type Item,
+  type NoSolutionRead,
+} from './states';
 import type { NoSolutionWhy, SolveFailure } from './types';
 
 /** How a search that found no solution ended, in today's words (NoSolutionWhy). */
@@ -119,9 +126,9 @@ export function legacyFeasible(
   ends: readonly (readonly Item[] | undefined)[] = [],
 ): boolean {
   const quiet = quietIn(items);
-  // A finding of validation about one range end is on that end's own list, and blocks today's
-  // feasibility as every validation error does.
-  if (ends.some((list) => (list ?? []).some(fromValidation))) return false;
+  // A range end whose own entry is not well formed blocks today's feasibility, as every validation
+  // error does: read by the rule the sheet's verdict reads (endEntryNotWellFormed).
+  if (ends.some((list) => endEntryNotWellFormed(list) !== undefined)) return false;
   return items.every(
     (i) =>
       i.status === 'ok' ||

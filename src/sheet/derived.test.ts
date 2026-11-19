@@ -7,7 +7,15 @@ import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
 import { resolvedSheet } from './resolve';
 import { legacyFeasible, legacyPointState } from './derived';
-import { causeFits, setOf, verdictOf, type Cause, type Item } from './states';
+import {
+  causeFits,
+  heldVerdictOf,
+  isComplete,
+  setOf,
+  verdictOf,
+  type Cause,
+  type Item,
+} from './states';
 import { describe as describeItem, standardProblems } from './describe';
 import { FINDING_CAUSES } from './items';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -71,10 +79,57 @@ function readings(res: SheetResult): { at: string; field: unknown; derived: unkn
       out.push({
         at: `range end ${e.name}`,
         field: e.state,
-        derived: legacyPointState(e.items, advisoryOf({ checks: e.checks, blocks: e.blocks })),
+        // An end that is not calculated was not run today, or ran on a sheet whose validation
+        // found an error about the sheet as a whole (see the suite of a range end's list).
+        derived: notCalculatedList(e.items)
+          ? e.state === 'not-run' ||
+            wholeSheetError(res) ||
+            restsOnAssumed(e.items, res.items ?? [])
+            ? e.state
+            : 'calculated'
+          : legacyPointState(e.items, advisoryOf({ checks: e.checks, blocks: e.blocks })),
       });
   return out;
 }
+
+/** Whether a range end's list is the one of an end the engine does not calculate. */
+const notCalculatedList = (items: readonly Item[]): boolean =>
+  items.some(
+    (i) =>
+      i.kind === 'sheet' &&
+      i.path.length === 0 &&
+      i.status === 'withheld' &&
+      i.on.some((o) => o.frame === 'design'),
+  );
+
+/** Whether an end is not calculated because the design point rests on an assumed level, which
+ *  today's state reads as no answer. */
+const restsOnAssumed = (items: readonly Item[], design: readonly Item[]): boolean =>
+  items.every(
+    (i) =>
+      i.status === 'withheld' &&
+      i.on.every((o) =>
+        design.some(
+          (d) =>
+            d.kind === o.kind &&
+            d.name === o.name &&
+            d.path.join('.') === o.path.join('.') &&
+            d.status === 'failed' &&
+            d.cause.kind === 'not-determined' &&
+            d.cause.data.why === 'assumed-level',
+        ),
+      ),
+  );
+
+/** Whether validation found an error about the sheet as a whole: the design point's list holds a
+ *  finding of validation that the statements do not determine one design. */
+const wholeSheetError = (res: SheetResult): boolean =>
+  (res.items ?? []).some(
+    (i) =>
+      i.status === 'failed' &&
+      i.cause.kind === 'not-determined' &&
+      i.cause.data.stage === 'validation',
+  );
 
 /** The withheld items of a list whose dependency is not a failed item of the list with that
  *  item's cause. */
@@ -86,7 +141,9 @@ function danglingIn(items: readonly Item[]): string[] {
   );
   return items.flatMap((i) =>
     i.status === 'withheld'
-      ? i.on.filter((o) => failedAt.get(key(o)) !== o.cause).map((o) => `${key(i)} -> ${key(o)}`)
+      ? i.on
+          .filter((o) => o.frame !== 'design' && failedAt.get(key(o)) !== o.cause)
+          .map((o) => `${key(i)} -> ${key(o)}`)
       : [],
   );
 }
@@ -144,6 +201,22 @@ const expectSame = (res: SheetResult): void => {
   // on each full list, where a block's own sheet item finds its parent's items.
   for (const list of [res.items ?? [], ...(res.rangeEnds ?? []).map((e) => e.items ?? [])])
     expect(danglingIn(list)).toEqual([]);
+  // An end that is not calculated waits on items of the design point's list, each failed with the
+  // cause it names.
+  for (const e of res.rangeEnds ?? [])
+    for (const i of e.items ?? [])
+      if (i.status === 'withheld')
+        for (const o of i.on)
+          if (o.frame === 'design') {
+            const hit = res.items?.find(
+              (x) =>
+                x.kind === o.kind && x.name === o.name && x.path.join('.') === o.path.join('.'),
+            );
+            expect({
+              on: o.name,
+              cause: hit?.status === 'failed' ? hit.cause.kind : undefined,
+            }).toEqual({ on: o.name, cause: o.cause });
+          }
 };
 
 const wideDev = generateDemoDevice({
@@ -1024,7 +1097,10 @@ describe('the items of the second audit', () => {
     const d = clone(tail);
     d.operatingRange![0].set = { NOPE: '1' };
     const res = lib(d);
+    // The design point was calculated: its list holds no copy of the finding, and the sheet's
+    // verdict reads the end's list, so it is not feasible while the finding stands.
     expect(top(res, 'sheet', '')?.status).toBe('ok');
+    expect(res.verdict?.verdict).not.toBe('feasible');
     expect(res.rangeEnds?.[0].items?.[0]).toMatchObject({
       status: 'failed',
       cause: {
@@ -1201,4 +1277,254 @@ describe('a search that nothing evaluates, beside a requirement that only fails'
       describeItem(res.items!.find((i) => i.kind === 'sheet' && i.path.join() === 'bias')!).lines,
     );
   });
+});
+
+describe('a placement that is not well formed', () => {
+  it('says which fault it is, as validation found it', () => {
+    const doc = sheet('mirrors-bias/matched-mirror-bank.json');
+    const res = runSheet(
+      {
+        ...doc,
+        nodes: { d: 'out', g: 'nref', s: 'gnd', bulk: 'gnd', intent: 'on' },
+      } as unknown as SheetDoc,
+      table,
+      undefined,
+      REFS,
+    );
+    const own = res.items?.find((i) => i.kind === 'device' && i.path.length === 0);
+    const netlist =
+      own?.status === 'failed' &&
+      own.cause.kind === 'not-determined' &&
+      own.cause.data.why === 'netlist'
+        ? own.cause.data.netlist
+        : undefined;
+    expect(netlist?.filter((n) => n.problem === 'placement').map((n) => n.placement)).toEqual([
+      { fault: 'unknown-key', key: 'bulk' },
+      { fault: 'no-wire', terminal: 'b' },
+      { fault: 'intent', value: 'on' },
+    ]);
+    expectSame(res);
+  });
+});
+
+describe('the list of a range end', () => {
+  const ota = sheet('otas/five-transistor-ota.json');
+  const run = (doc: SheetDoc): SheetResult => runSheet(doc, table, undefined, REFS);
+  const top = (items: readonly Item[] | undefined): Item | undefined =>
+    items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
+
+  it('takes the findings of validation about the entries its run evaluates', () => {
+    const res = run({
+      ...ota,
+      checks: ota.checks.map((c) => (c.id === 'gain-spec' ? { ...c, op: '==', tolPct: -1 } : c)),
+    } as SheetDoc);
+    const gain = (items: readonly Item[] | undefined): Item | undefined =>
+      items?.find((i) => i.kind === 'requirement' && i.name === 'gain-spec');
+    expect(gain(res.items)).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'not-read', data: { why: 'field', entry: 'tolerance', stage: 'validation' } },
+    });
+    for (const e of res.rangeEnds ?? []) expect(gain(e.items)).toEqual(gain(res.items));
+    expectSame(res);
+  });
+
+  it('is not calculated where validation finds an error about the sheet as a whole', () => {
+    const res = run({
+      ...ota,
+      blocks: ota.blocks?.map((b) =>
+        b.name === 'tail' ? { ...b, nodes: { ...(b.nodes as object), bulk: 'gnd' } } : b,
+      ),
+    } as SheetDoc);
+    for (const e of res.rangeEnds ?? []) {
+      // Today's state is the run's, beside the list that does not read it.
+      expect(e.state).toBe('does-not-comply');
+      expect(e.items).toEqual([
+        {
+          kind: 'sheet',
+          path: [],
+          name: '',
+          status: 'withheld',
+          on: [
+            { kind: 'sheet', path: ['tail'], name: '', frame: 'design', cause: 'not-determined' },
+          ],
+        },
+      ]);
+    }
+    expectSame(res);
+  });
+
+  it('never reads compliant on a sheet whose validation finds an error', () => {
+    const broken: [string, SheetDoc][] = [
+      [
+        'tolerance',
+        {
+          ...ota,
+          checks: ota.checks.map((c) =>
+            c.id === 'gain-spec' ? { ...c, op: '==', tolPct: -1 } : c,
+          ),
+        },
+      ],
+      [
+        'netlist',
+        {
+          ...ota,
+          blocks: ota.blocks?.map((b) =>
+            b.name === 'tail' ? { ...b, nodes: { ...(b.nodes as object), bulk: 'gnd' } } : b,
+          ),
+        } as SheetDoc,
+      ],
+      ['param', withParams(ota, { Av_target: Number.NaN })],
+      [
+        'range end',
+        {
+          ...ota,
+          operatingRange: ota.operatingRange?.map((e, k) =>
+            k ? e : { ...e, set: { CM_dc: '((' } },
+          ),
+        },
+      ],
+      [
+        'equation',
+        {
+          ...ota,
+          equations: [...ota.equations, { name: 'broken_eq', expr: '((' }],
+        },
+      ],
+    ];
+    // Every requirement of the sheet made advisory, so that none fails and decides the verdict.
+    const soft = (d: SheetDoc): SheetDoc => ({
+      ...d,
+      checks: d.checks.map((c) => ({ ...c, kind: 'advisory' })),
+    });
+    for (const [what, d] of broken) {
+      const res = run(soft(d));
+      expect({ what, error: res.warnings.some((w) => w.severity === 'error') }).toEqual({
+        what,
+        error: true,
+      });
+      // A finding about one range end is about that end alone: the other end is read as it is.
+      for (const e of res.rangeEnds ?? [])
+        if (what !== 'range end' || e.name === 'cm-lo')
+          expect({ what, end: e.name, verdict: heldVerdictOf(e.items ?? []).verdict }).not.toEqual({
+            what,
+            end: e.name,
+            verdict: 'compliant',
+          });
+    }
+    // The same sheet with no error reads compliant at its ends, so the cases above are not
+    // compliant for the error alone.
+    const res = run(soft(ota));
+    expect(res.rangeEnds?.map((e) => heldVerdictOf(e.items ?? []).verdict)).toEqual([
+      'compliant',
+      'compliant',
+    ]);
+    expect(top(res.items)?.status).toBe('ok');
+  }, 60_000);
+});
+
+describe('a range end that is not calculated, in the design point’s terms', () => {
+  const ota = sheet('otas/five-transistor-ota.json');
+
+  it('waits on a level the design point rests on as assumed', () => {
+    const { out: _out, ...levels } = (ota as unknown as { levels: Record<string, string> }).levels;
+    const doc = {
+      ...ota,
+      levels,
+      params: ota.params.map((p) => (p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p)),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    for (const e of res.rangeEnds ?? []) {
+      expect(e.verdict).toBeUndefined();
+      expect(e.items).toEqual([
+        {
+          kind: 'sheet',
+          path: [],
+          name: '',
+          status: 'withheld',
+          on: [
+            {
+              kind: 'value',
+              path: [],
+              name: 'V_out_dc',
+              frame: 'design',
+              cause: 'not-determined',
+            },
+          ],
+        },
+      ]);
+    }
+    expectSame(res);
+  });
+});
+
+describe('the verdict of a sheet whose range end’s own entry failed', () => {
+  it('reads the end, names its item with the end’s name, and keeps no copy on the design point', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc: SheetDoc = {
+      ...ota,
+      checks: ota.checks.map((c) => ({ ...c, kind: 'advisory' })),
+      operatingRange: ota.operatingRange?.map((e, k) => (k ? e : { ...e, set: { CM_dc: '((' } })),
+    };
+    const res = runSheet(doc, table, undefined, REFS);
+    expect(res.feasible).toBe(false);
+    expect((res.items ?? []).filter((i) => i.status !== 'ok' && i.kind !== 'requirement')).toEqual(
+      [],
+    );
+    expect(isComplete(res)).toBe(true);
+    expect(res.verdict?.verdict).toBe('undetermined');
+    expect(res.verdict?.failed).toEqual([
+      expect.objectContaining({
+        kind: 'sheet',
+        path: [],
+        name: '',
+        end: 'cm-lo',
+        cause: expect.objectContaining({ kind: 'cannot-evaluate' }),
+      }),
+    ]);
+    expectSame(res);
+  });
+});
+
+describe('a part whose placement is not well formed', () => {
+  it('is that placement’s finding alone, not a part that names no wires', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...ota,
+      blocks: ota.blocks?.map((b) => (b.name === 'in' ? { ...b, nodes: 5 } : b)),
+    } as unknown as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const problems = res.warnings.flatMap((w) =>
+      w.about?.kind === 'netlist' ? [[w.about.problem, w.about.devices]] : [],
+    );
+    expect(problems).toEqual([['placement', ['in']]]);
+    expectSame(res);
+  });
+});
+
+describe('a range end whose own entry is not well formed, or gives no number', () => {
+  const ota = sheet('otas/five-transistor-ota.json');
+  // Every requirement advisory, so that none fails and decides the verdict.
+  const soft: SheetDoc = { ...ota, checks: ota.checks.map((c) => ({ ...c, kind: 'advisory' })) };
+  const withSet = (set: Record<string, string>): SheetDoc => ({
+    ...soft,
+    operatingRange: soft.operatingRange?.map((e, k) => (k ? e : { ...e, set })),
+  });
+  const cases: [string, Record<string, string>, boolean, string][] = [
+    ['a set that does not parse', { CM_dc: '((' }, false, 'undetermined'],
+    ['a set of a name that is not an input', { NOPE: '1' }, false, 'undetermined'],
+    ['a set that gives no number at this design', { CM_dc: 'sqrt(0-1)' }, true, 'feasible'],
+    ['a set that reads a name no entry declares', { CM_dc: 'nothing_here' }, true, 'feasible'],
+  ];
+  for (const [what, set, feasible, verdict] of cases)
+    it(`reads ${verdict} where ${what}, with today's feasibility the same`, () => {
+      const res = runSheet(withSet(set), table, undefined, REFS);
+      expect({ feasible: res.feasible, verdict: res.verdict?.verdict }).toEqual({
+        feasible,
+        verdict,
+      });
+      expect(res.feasible).toBe(res.verdict?.verdict === 'feasible');
+      // The end is not answered, whatever the verdict of the sheet.
+      expect(res.rangeEnds?.[0].verdict).toBeUndefined();
+      expectSame(res);
+    });
 });

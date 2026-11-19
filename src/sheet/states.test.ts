@@ -23,11 +23,15 @@ import {
   type ItemRef,
   type SearchData,
   type NoSolutionRead,
+  type Verdict,
+  type WithheldOn,
 } from './states';
 import {
   CAUSE_NAMES,
   causeMessage,
   describe,
+  incompleteMessage,
+  incompleteText,
   notAskedText,
   rangeSource,
   withheldClause,
@@ -857,6 +861,53 @@ group('the texts of a finding with no item of its own', () => {
         ['The wiring of part load is not well formed.'],
       ],
       [
+        { problem: 'placement', devices: ['load'], placement: { fault: 'shape' } },
+        [
+          'The wiring of part load is not well formed.',
+          "A part's wiring is one placement of drain, gate, source and body wires, or a list of placements.",
+        ],
+      ],
+      [
+        { problem: 'placement', devices: ['givens'], placement: { fault: 'shape', none: true } },
+        [
+          'The wiring of the device of this sheet is not well formed.',
+          "A part's wiring is one placement of drain, gate, source and body wires, a list of placements, or none.",
+        ],
+      ],
+      [
+        {
+          problem: 'placement',
+          devices: ['load'],
+          placement: { fault: 'unknown-key', key: 'bulk' },
+        },
+        [
+          'The wiring of part load names bulk, which a placement does not have.',
+          'A placement names only the drain, gate, source and body wires.',
+        ],
+      ],
+      [
+        {
+          problem: 'placement',
+          devices: ['load'],
+          placement: { fault: 'no-wire', terminal: 'g', index: 1 },
+        },
+        ['Placement 2 of part load names no wire for the gate.', 'Each terminal needs a wire.'],
+      ],
+      [
+        { problem: 'placement', devices: ['load'], placement: { fault: 'intent', value: 'on' } },
+        [
+          'The wiring of part load sets its intent to on.',
+          'The only intent that a placement can set is off, for a device meant to be off.',
+        ],
+      ],
+      [
+        { problem: 'placement', devices: ['load'], placement: { fault: 'mixed-diode' } },
+        [
+          'Some placements of part load put the gate on the drain wire and some do not.',
+          'Put the diode-connected placements and the others in separate blocks.',
+        ],
+      ],
+      [
         { problem: 'selector', devices: ['givens'], param: 's' },
         ['The axis-sign selector s does not match the table of the device of this sheet.'],
       ],
@@ -1395,5 +1446,213 @@ group('findings of the netlist check that say the same thing', () => {
       'The statements of the sheet do not determine one design.',
       'The wiring of part tail is not well formed.',
     ]);
+  });
+});
+
+group('a range end that is not calculated', () => {
+  const end = (on: WithheldOn[]): Item => ({
+    kind: 'sheet',
+    path: [],
+    name: '',
+    status: 'withheld',
+    on,
+  });
+  const check = (
+    item: Item,
+    name: string | undefined,
+    design: Item[] | undefined,
+    want: string[],
+  ) => {
+    const said = describe(item, [], name, design);
+    expect(said.lines).toEqual(want);
+    for (const l of said.segments) expect(standardProblems(l)).toEqual([]);
+  };
+  const searchFailed = failed('search', 'V_tail', {
+    kind: 'cannot-evaluate',
+    data: { why: 'not-finite', name: 'V_tail', reason: '' },
+  });
+  const wiring: Item = {
+    kind: 'sheet',
+    path: ['in'],
+    name: '',
+    status: 'failed',
+    cause: {
+      kind: 'not-determined',
+      data: {
+        why: 'netlist',
+        names: ['in'],
+        message: '',
+        netlist: [
+          {
+            problem: 'placement',
+            devices: ['in'],
+            placement: { fault: 'unknown-key', key: 'x' },
+          },
+        ],
+      },
+    },
+  };
+
+  it('names the end, says why from the design point’s items, and gives one line for each', () => {
+    check(
+      end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),
+      'cm-lo',
+      [wiring],
+      [
+        'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+        'At the design point, the wiring of part in names x, which a placement does not have.',
+      ],
+    );
+  });
+
+  it('says the design point has no design where an item it waits on failed', () => {
+    const said = describe(
+      end([
+        { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'cannot-evaluate' },
+      ]),
+      [],
+      'cm-lo',
+      [searchFailed],
+    ).lines;
+    expect(said).toEqual([
+      'Range end cm-lo is not calculated, because the design point has no design.',
+      'At the design point, the engine could not calculate V_tail.',
+    ]);
+  });
+
+  it('says the design point rests on an assumed level', () => {
+    const assumed = failed('value', 'V_out_dc', {
+      kind: 'not-determined',
+      data: { why: 'assumed-level', names: ['V_out_dc'], message: '' },
+    });
+    check(
+      end([
+        { kind: 'value', path: [], name: 'V_out_dc', frame: 'design', cause: 'not-determined' },
+      ]),
+      'cm-hi',
+      [assumed],
+      [
+        'Range end cm-hi is not calculated, because the design point rests on an assumed level.',
+        'At the design point, V_out_dc is an assumed level.',
+      ],
+    );
+  });
+
+  it('names what the engine did for a search that found no solution', () => {
+    const noCrossing = failed('search', 'V_tail', {
+      kind: 'no-crossing',
+      data: {
+        ...search({ unknown: 'V_tail' }),
+        ...read([0, 1, 2], [1, 3, 2]),
+        notProof: 'not-monotonic',
+        endsRead: false,
+      },
+    });
+    check(
+      end([{ kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'no-crossing' }]),
+      'cm-lo',
+      [noCrossing],
+      [
+        'Range end cm-lo is not calculated, because the design point has no design.',
+        'At the design point, the engine found no solution for V_tail.',
+      ],
+    );
+  });
+
+  it('gives one line and no reason, where the design point’s list is not given', () => {
+    check(
+      end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),
+      'cm-lo',
+      undefined,
+      ['Range end cm-lo is not calculated.'],
+    );
+  });
+});
+
+group('why a run is not complete, as one string', () => {
+  it('gives each finding’s name, then its lines, one to a line', () => {
+    const items: Item[] = [
+      { kind: 'sheet', path: [], name: '', status: 'ok' },
+      failed('device', 'givens', {
+        kind: 'outside-table',
+        data: { device: 'givens', quantity: 'l', asked: 5e-6, held: [180e-9, 2e-6] },
+      }),
+    ];
+    const [f] = incompleteText(items);
+    expect(incompleteMessage(items)).toBe([f.name, ...f.lines].join('\n'));
+    // Nothing incomplete: nothing to say.
+    expect(incompleteText([{ kind: 'sheet', path: [], name: '', status: 'ok' }])).toEqual([]);
+    expect(incompleteMessage([{ kind: 'sheet', path: [], name: '', status: 'ok' }])).toBe('');
+    // Incomplete, with no failed item to say why.
+    expect(
+      incompleteMessage([
+        {
+          kind: 'value',
+          path: [],
+          name: 'y',
+          status: 'withheld',
+          on: [{ kind: 'value', path: [], name: 'x', cause: 'cannot-evaluate' }],
+        },
+      ]),
+    ).toBe('The evaluation did not complete.');
+  });
+});
+
+group('why a range end that is not calculated is not complete', () => {
+  it('is that end’s own text', () => {
+    const design = [
+      failed('search', 'V_tail', {
+        kind: 'cannot-evaluate',
+        data: { why: 'not-finite', name: 'V_tail', reason: '' },
+      }),
+    ];
+    const items: Item[] = [
+      {
+        kind: 'sheet',
+        path: [],
+        name: '',
+        status: 'withheld',
+        on: [
+          { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'cannot-evaluate' },
+        ],
+      },
+    ];
+    expect(incompleteMessage(items, 'cm-lo', design).split('\n').slice(1)).toEqual([
+      'Range end cm-lo is not calculated, because the design point has no design.',
+      'At the design point, the engine could not calculate V_tail.',
+    ]);
+  });
+});
+
+group('the line of an undetermined verdict', () => {
+  it('names a range end whose own entry failed, and each other failed item', () => {
+    const v: Verdict = {
+      verdict: 'undetermined',
+      failed: [
+        {
+          kind: 'sheet',
+          path: [],
+          name: '',
+          end: 'cm-lo',
+          cause: { kind: 'cannot-evaluate', data: { why: 'syntax', name: '((', reason: '' } },
+        },
+        {
+          kind: 'search',
+          path: [],
+          name: 'V_tail',
+          cause: {
+            kind: 'cannot-evaluate',
+            data: { why: 'not-finite', name: 'V_tail', reason: '' },
+          },
+        },
+      ],
+    };
+    const lines = verdictText(v);
+    expect(lines.map(lineText)).toEqual([
+      'The verdict is undetermined, because the entry of range end cm-lo is not well formed.',
+      'The verdict is undetermined, because the engine could not calculate V_tail.',
+    ]);
+    expect(lines[0].find((sg) => sg.kind === 'name')).toEqual({ kind: 'name', text: 'cm-lo' });
+    for (const l of lines) expect(standardProblems(l)).toEqual([]);
   });
 });

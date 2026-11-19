@@ -2109,7 +2109,12 @@ describe('sweepAtCondition — one condition, sized there or held there', () => 
       ...sweep
     } = sweepAtCondition(doc, param, device, tt, noDevices, REFS, { base: tt, points: 4 });
     expect([at, base, design]).toEqual([tt, tt, 'sized']);
-    expect(sweep).toEqual(plain);
+    // The plain sweep also gives each sample's verdict, which the sweep at a condition does not yet:
+    // its verdicts are gaps.
+    const { verdicts: _verdicts, ...today } = plain;
+    const { verdicts: none, ...atCondition } = sweep;
+    expect(none).toEqual(plain.x.map(() => null));
+    expect(atCondition).toEqual(today);
     // Not vacuous: the sweep carries checks, range-end curves and samples that evaluated.
     expect(plain.checks.some((c) => c.rangeEnd !== undefined)).toBe(true);
     expect(plain.stands.some(Boolean)).toBe(true);

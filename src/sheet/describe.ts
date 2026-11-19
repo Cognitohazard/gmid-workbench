@@ -2,7 +2,7 @@
 // code that produces a result writes data, never these sentences, so the app and a script read the
 // same words, and a change of wording is a change here alone.
 
-import type { NetlistAbout, OutsideTable } from '../types';
+import type { NetlistAbout, OutsideTable, PlacementFault } from '../types';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { amps } from './nodes';
 import { shown } from './linear';
@@ -37,6 +37,7 @@ import type {
   Verdict,
   WithheldOn,
 } from './states';
+import { incompleteOn } from './states';
 
 // ── Numbers, units and names as a message quotes them ────────────────────────────────────────
 
@@ -1225,7 +1226,9 @@ function netlistLines(n: NetlistAbout): Line[] {
           ? [t`The diode flag of ${part} is on, but its wires do not put its gate on its drain.`]
           : [t`The wires of ${part} and its diode flag disagree.`];
     case 'placement':
-      return [t`The wiring of ${part} is not well formed.`];
+      return n.placement
+        ? placementLines(n.placement, part)
+        : [t`The wiring of ${part} is not well formed.`];
     case 'level-refused':
       return [
         t`The sheet gives wire ${wire} the level ${ex(n.level ?? '')}, but a level can read only numbers, specs and knobs.`,
@@ -1240,6 +1243,44 @@ function netlistLines(n: NetlistAbout): Line[] {
         : [t`The netlist check reports a problem in the wiring of the sheet.`];
     case 'selector':
       return [t`The axis-sign selector ${nm(n.param ?? '')} does not match the table of ${part}.`];
+  }
+}
+
+/** Each terminal, as a sentence names it. */
+const TERMINAL_WORD = { d: 'drain', g: 'gate', s: 'source', b: 'body' } as const;
+
+/** A placement that is not well formed, by its fault. */
+function placementLines(f: PlacementFault, part: Line): Line[] {
+  const which = (index: number | undefined): Line =>
+    index === undefined ? t`The wiring of ${part}` : t`Placement ${String(index + 1)} of ${part}`;
+  switch (f.fault) {
+    case 'shape':
+      return [
+        t`The wiring of ${part} is not well formed.`,
+        f.none
+          ? t`A part's wiring is one placement of drain, gate, source and body wires, a list of placements, or none.`
+          : t`A part's wiring is one placement of drain, gate, source and body wires, or a list of placements.`,
+      ];
+    case 'unknown-key':
+      return [
+        t`${which(f.index)} names ${nm(f.key)}, which a placement does not have.`,
+        t`A placement names only the drain, gate, source and body wires.`,
+      ];
+    case 'no-wire':
+      return [
+        t`${which(f.index)} names no wire for the ${TERMINAL_WORD[f.terminal]}.`,
+        t`Each terminal needs a wire.`,
+      ];
+    case 'intent':
+      return [
+        t`${which(f.index)} sets its intent to ${val(f.value)}.`,
+        t`The only intent that a placement can set is off, for a device meant to be off.`,
+      ];
+    case 'mixed-diode':
+      return [
+        t`Some placements of ${part} put the gate on the drain wire and some do not.`,
+        t`Put the diode-connected placements and the others in separate blocks.`,
+      ];
   }
 }
 
@@ -1524,6 +1565,8 @@ const parentGivesNo = (inputs: readonly string[] | undefined): Line =>
  *  cause, so the not-proved cause never reads as a proof. */
 export function withheldClause(r: WithheldOn): Line {
   if (r.frame === 'parent') return parentGivesNo(r.inputs);
+  if (r.frame === 'design')
+    return withheldClause({ kind: r.kind, path: r.path, name: r.name, cause: r.cause });
   const n = itemName(r);
   switch (r.cause) {
     case 'not-read':
@@ -1557,12 +1600,109 @@ export function withheldClause(r: WithheldOn): Line {
   }
 }
 
+/** The item of the design point's list a pointer of a range end names. */
+const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
+  design.find(
+    (i) =>
+      i.kind === r.kind &&
+      i.name === r.name &&
+      i.path.length === r.path.length &&
+      i.path.every((p, k) => p === r.path[k]),
+  );
+
+/** Why a range end is not calculated, from the design point's items its pointers name: the design
+ *  point has no design where one of them is not complete (incompleteOn) for a reason other than
+ *  the statements; else its statements do not determine one design; else it rests on an assumed
+ *  level. Undefined where none of these is what the items say. */
+function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
+  const items = on.flatMap((r) => {
+    const i = r.frame === 'design' ? pointedAt(r, design) : undefined;
+    return i ? [i] : [];
+  });
+  const determined = (i: Item): boolean =>
+    i.status === 'failed' && i.cause.kind === 'not-determined';
+  const assumed = (i: Item): boolean =>
+    determined(i) &&
+    i.status === 'failed' &&
+    i.cause.kind === 'not-determined' &&
+    i.cause.data.why === 'assumed-level';
+  if (items.some((i) => incompleteOn([i]).length > 0 && !determined(i)))
+    return t`the design point has no design`;
+  if (items.some((i) => determined(i) && !assumed(i)))
+    return t`the statements of the sheet do not determine one design`;
+  if (items.some(assumed)) return t`the design point rests on an assumed level`;
+  return undefined;
+}
+
+/** A line as the clause after "At the design point,": its first word in lower case where it opens
+ *  with plain text; a name keeps its case. */
+const lowerFirst = (l: Line): Line => {
+  const [first, ...rest] = l;
+  if (first?.kind !== 'text' || !first.text) return l;
+  return [
+    { kind: 'text', text: first.text.charAt(0).toLowerCase() + first.text.slice(1) },
+    ...rest,
+  ];
+};
+
+/** The one line a range end that is not calculated gives for a failed item of the design point it
+ *  waits on: that item's first specific sentence, after "At the design point, ". A design on an
+ *  assumed level says the value is one; a finding that the statements do not determine one design
+ *  gives the sentence after its heading; any other cause, the clause that names what failed. The
+ *  details stay on the design point. */
+function designLine(i: Item): Line {
+  const ref = { kind: i.kind, path: i.path, name: i.name };
+  if (i.status === 'failed' && i.cause.kind === 'not-determined') {
+    if (i.cause.data.why === 'assumed-level')
+      return t`At the design point, ${itemName(ref)} is an assumed level.`;
+    const specific = describe(i).segments[1];
+    if (specific) return t`At the design point, ${lowerFirst(specific)}`;
+  }
+  const kind = i.status === 'failed' ? i.cause.kind : 'cannot-evaluate';
+  return t`At the design point, ${withheldClause({ ...ref, cause: kind })}.`;
+}
+
+/** The lines of a range end the engine does not calculate. With the design point's list: the reason,
+ *  then one line for each failed item its pointers name. Without it: one line, with no reason, as
+ *  what the pointer names cannot be told from the pointer alone. */
+function notCalculatedText(
+  on: readonly WithheldOn[],
+  end: string | undefined,
+  design: readonly Item[] | undefined,
+): Line[] {
+  const who = end === undefined ? t`This range end` : t`Range end ${nm(end)}`;
+  const reason = design ? designReason(on, design) : undefined;
+  const head = reason
+    ? t`${who} is not calculated, because ${reason}.`
+    : t`${who} is not calculated.`;
+  if (!design) return [head];
+  const clauses = on.flatMap((r): Line[] => {
+    const own = pointedAt(r, design);
+    return own?.status === 'failed' ? [designLine(own)] : [];
+  });
+  return distinctLines([head, ...clauses]);
+}
+
 /** What a reader is shown for one item: nothing for an item that is ok; for a failed one, its
  *  cause's text; for a withheld one, one sentence for each failed item it depends on. `within`
  *  is the path of the block whose own list the item is read in, where it is one. */
-export function describe(item: Item, within: readonly string[] = []): FindingText {
+export function describe(
+  item: Item,
+  within: readonly string[] = [],
+  end?: string,
+  design?: readonly Item[],
+): FindingText {
   if (item.status === 'ok')
     return item.attributes?.kind === 'held' ? heldText(item, item.attributes) : finding('', []);
+  // A range end the engine does not calculate: the design point gives no design, and its items say
+  // why.
+  if (
+    item.status === 'withheld' &&
+    item.kind === 'sheet' &&
+    !item.path.length &&
+    item.on.some((r) => r.frame === 'design')
+  )
+    return finding(WITHHELD_NAME, notCalculatedText(item.on, end, design));
   if (item.status === 'withheld' && !item.on.length)
     return finding(WITHHELD_NAME, [upperFirst(t`${itemName(item)} is not calculated.`)]);
   if (item.status === 'withheld')
@@ -1602,11 +1742,23 @@ function heldText(r: ItemRef, a: Extract<Attributes, { kind: 'held' }>): Finding
  *  instead of solving, that the verdict is undetermined because of it. */
 export function verdictText(v: Verdict<string>): readonly Line[] {
   const held = v.held ?? [];
-  if (!held.length) return [];
-  const names = andLines(held.map((r) => inBlock(r.name, r.path, r)));
-  return [
-    t`The verdict is undetermined, because ${names} ${held.length > 1 ? 'are' : 'is'} held and not solved.`,
-  ];
+  const lines: Line[] = [];
+  if (held.length) {
+    const names = andLines(held.map((r) => inBlock(r.name, r.path, r)));
+    lines.push(
+      t`The verdict is undetermined, because ${names} ${held.length > 1 ? 'are' : 'is'} held and not solved.`,
+    );
+  }
+  // An undetermined verdict gives one clause for each failed item it rests on: a range end's own
+  // item by the end's name.
+  if (v.verdict === 'undetermined')
+    for (const f of v.failed)
+      lines.push(
+        f.end !== undefined
+          ? t`The verdict is undetermined, because the entry of range end ${nm(f.end)} is not well formed.`
+          : t`The verdict is undetermined, because ${withheldClause({ kind: f.kind, path: f.path, name: f.name, cause: f.cause.kind })}.`,
+      );
+  return distinctLines(lines);
 }
 
 /** What a held point or range end that was not run is shown: its own word, and why. */
@@ -1616,3 +1768,39 @@ export const notAskedText = (what: 'range end' | 'held point', name: string): Fi
       ? t`The engine did not run range end ${nm(name)}, because the design point has no design.`
       : t`The engine did not run the condition ${nm(name)}, because the design point has no design.`,
   ]);
+
+/** Why a run is not complete (incompleteOn): the finding of each failed item whose number it does
+ *  not have, in the list's order; a withheld item follows from one of them. The list of a range end
+ *  that is not calculated gives that end's own text (`end`, `design` as describe takes them). A list
+ *  with nothing incomplete gives nothing; one that is incomplete and gives no text reads that the
+ *  evaluation did not complete, as a refusal with no reason is indistinguishable from a verdict.
+ *  Each reader renders the findings. */
+export function incompleteText(
+  items: readonly Item[],
+  end?: string,
+  design?: readonly Item[],
+): FindingText[] {
+  const [only] = items;
+  if (
+    items.length === 1 &&
+    only.kind === 'sheet' &&
+    only.status === 'withheld' &&
+    only.on.some((r) => r.frame === 'design')
+  )
+    return [describe(only, [], end, design)];
+  const missing = incompleteOn(items);
+  if (!missing.length) return [];
+  const why = missing.filter((i) => i.status === 'failed').map((i) => describe(i));
+  return why.length ? why : [finding('', [t`The evaluation did not complete.`])];
+}
+
+/** incompleteText as one string, where one is needed (a thrown error, a refusal to a script): each
+ *  finding's name, then each of its lines, one to a line; empty where nothing is incomplete. */
+export const incompleteMessage = (
+  items: readonly Item[],
+  end?: string,
+  design?: readonly Item[],
+): string =>
+  incompleteText(items, end, design)
+    .flatMap((f) => (f.name ? [f.name, ...f.lines] : f.lines))
+    .join('\n');

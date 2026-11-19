@@ -175,7 +175,24 @@ export interface NetlistAbout {
   readonly level?: string;
   /** For a problem that names no wire or device (`other`): where its finding is located. */
   readonly where?: string;
+  /** For a placement that is not well formed: which fault it is (PlacementFault). */
+  readonly placement?: PlacementFault;
 }
+
+/** What is wrong with a device's placements (NetlistAbout `placement`): not one placement or a
+ *  list of them; a key a placement does not have; a terminal on no wire; an intent other than
+ *  "off"; some placements diode-connected and some not. `index` is the placement's position where
+ *  the device has more than one. */
+export type PlacementFault =
+  | {
+      readonly fault: 'shape';
+      /** Where the sheet's own device may also be written as having no wires ("none"). */
+      readonly none?: true;
+    }
+  | { readonly fault: 'unknown-key'; readonly key: string; readonly index?: number }
+  | { readonly fault: 'no-wire'; readonly terminal: 'd' | 'g' | 's' | 'b'; readonly index?: number }
+  | { readonly fault: 'intent'; readonly value: unknown; readonly index?: number }
+  | { readonly fault: 'mixed-diode' };
 
 export interface ImportError {
   readonly kind: string;

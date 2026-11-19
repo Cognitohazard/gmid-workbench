@@ -202,7 +202,9 @@ const sheet = {
 };
 
 const out = runSheet(sheet, table);
-console.log(out.feasible, out.values.W, out.checks);
+// The verdict: feasible, non-compliant, infeasible or undetermined, with the failed items it rests
+// on. `feasible` is still written beside it.
+console.log(out.verdict.verdict, out.feasible, out.values.W, out.checks);
 
 // Trace the gm_id knob across its [min, max] to map the feasibility region.
 const sweep = sweepSheet(sheet, 'gm_id', table);
@@ -254,7 +256,7 @@ import { withOverrides } from './dist/index.js';
 
 for (const L of [2e-6, 4e-6, 6e-6]) {
   const res = runSheet(withOverrides(sheet, { 'bias.L_MB5': L }, refs), table, resolve, refs);
-  console.log(L, res.feasible);
+  console.log(L, res.verdict.verdict, res.feasible);
 }
 ```
 

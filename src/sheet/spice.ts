@@ -12,6 +12,7 @@
 import { compileExpr } from '../derive';
 import { scalarScope } from '../expr';
 import { blockWires, flattened, formatOf, placementsOf } from './nodes';
+import type { DesignVerdict } from './states';
 import {
   GROUND,
   MAX_BLOCK_DEPTH,
@@ -104,6 +105,9 @@ export interface SizedNetlist {
   /** False for a sheet that is not a circuit (`nodes: "none"`) or names no wiring; such a
    *  netlist carries figures and nothing else. */
   circuit: boolean;
+  /** The verdict of the run the netlist is written from (SheetResult.verdict). */
+  verdict: DesignVerdict;
+  /** The run's feasibility flag (SheetResult.feasible), still written beside the verdict. */
   feasible: boolean;
   devices: NetlistDevice[];
   elements: NetlistElement[];
@@ -175,7 +179,8 @@ export function sizedNetlist(doc: SheetDoc, res: SheetResult): SizedNetlist {
       ...(e.unit ? { unit: e.unit } : {}),
     })),
   ];
-  const base = { title: doc.title, feasible: res.feasible, params, figures, errors };
+  const verdict = res.verdict?.verdict ?? 'undetermined';
+  const base = { title: doc.title, verdict, feasible: res.feasible, params, figures, errors };
   if (formatOf(doc) !== 2 || doc.nodes === 'none' || !res.nodes)
     return {
       ...base,

@@ -13,10 +13,8 @@ import {
   choiceKnobs,
   outsideIn,
   RANGE_END_SEP,
-  rangeEndBroke,
   engineSolved,
   OWN_DEVICE,
-  stands,
   sweepable,
   treeCheckResults,
   withoutRange,
@@ -35,6 +33,8 @@ import { evaluateSheet, type DeviceResolver } from './eval';
 import type { Settings } from './settings';
 import { validateSheet } from './validate';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
+import { givesValue } from './items';
+import { isComplete } from './states';
 import { outsideMessage } from './describe';
 
 /**
@@ -189,8 +189,8 @@ export function sheetSensitivities(
     ? opts.check.slice(0, opts.check.indexOf(RANGE_END_SEP))
     : undefined;
   const endBroke = (res: SheetResult): boolean =>
-    (res.rangeEnds ?? []).some((e) => e.name === end && rangeEndBroke(e));
-  const whole = (res: SheetResult): boolean => stands(res) && !endBroke(res);
+    (res.rangeEnds ?? []).some((e) => e.name === end && !isComplete(e));
+  const whole = (res: SheetResult): boolean => isComplete(res) && !endBroke(res);
   const base = at({});
   const baseOutside = outsideIn(base);
   if (baseOutside.length) {
@@ -200,7 +200,7 @@ export function sheetSensitivities(
         `around`,
     );
   }
-  if (!stands(base)) {
+  if (!isComplete(base)) {
     return dead(
       'the sheet does not evaluate at its own values, so there is no point to differentiate ' +
         'around — fix the evaluation first',
@@ -252,7 +252,7 @@ export function sheetSensitivities(
     ): {
       checks?: Map<string, CheckResult>;
       values?: SheetResult['values'];
-      withheld?: SheetResult['withheld'];
+      given?: (name: string) => boolean;
       why?: string;
       beyond: boolean;
     } => {
@@ -270,7 +270,7 @@ export function sheetSensitivities(
         return {
           checks: treeCheckResults(res),
           values: res.values,
-          withheld: res.withheld,
+          given: (name) => givesValue(res, name),
           beyond: false,
         };
       return { why: `the evaluation at ${p.name} = ${p.value + dx} did not stand`, beyond: false };
@@ -376,7 +376,7 @@ function result(
   name: string,
   unit: string | undefined,
   base: SheetResult,
-  taken: readonly { values?: SheetResult['values']; withheld?: SheetResult['withheld'] }[],
+  taken: readonly { values?: SheetResult['values']; given?: (name: string) => boolean }[],
   offsets: [number, number],
   knob: SheetVar,
 ): SheetSensitivityResult {
@@ -384,7 +384,7 @@ function result(
   const head = { name, ...(unit ? { unit } : {}) };
   const blank = { base: v0 ?? NaN, dPerUnit: NaN, deltaPlus: NaN, deltaMinus: NaN };
   const cause = base.withheld?.[name];
-  if (cause !== undefined || v0 === undefined)
+  if (!givesValue(base, name))
     return {
       ...head,
       ...blank,
@@ -393,7 +393,7 @@ function result(
           ? `${name} is withheld at the design, because it follows from ${cause === OWN_DEVICE ? 'the sheet’s own device' : cause}.`
           : `${name} has no value at the design.`,
     };
-  const at = taken.map((t) => (t.withheld?.[name] !== undefined ? undefined : t.values?.[name]));
+  const at = taken.map((t) => (t.given?.(name) ? t.values?.[name] : undefined));
   if (at.some((v) => v === undefined))
     return {
       ...head,

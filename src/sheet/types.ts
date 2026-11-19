@@ -6,7 +6,7 @@
 // level derived from it is fed back into the design. Pure data; zero DOM imports.
 
 import type { OutsideTable, QAWarning } from '../types';
-import type { Item, Verdict } from './states';
+import type { DesignVerdict, HeldVerdict, Item, Verdict } from './states';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
 import { BINDABLE } from '../device';
@@ -1298,8 +1298,13 @@ export interface RangeEndReport {
    *  child). Reported rather than warned, like SizingReport.assumed: it is a property of what
    *  the author wrote down, and the fix is to author the current explicitly. */
   assumedSource?: string[];
-  /** The run's items with their statuses (SheetResult.items); absent where nothing was run. */
+  /** The run's items with their statuses (SheetResult.items). An end the engine did not calculate
+   *  has one sheet item: withheld on the design point's items where the design point gives no
+   *  design, or failed with the finding about its own entry. */
   items?: Item[];
+  /** The end's verdict, from its items (endVerdict). Absent where the engine did not calculate
+   *  the end. `state` is still written beside it. */
+  verdict?: Verdict<HeldVerdict>;
 }
 
 /** A range end's outcome — one compliance point's. `not-run` and `no-answer` are first-class
@@ -1576,6 +1581,10 @@ export interface SheetResult {
    *  outcome; nothing reads these yet. */
   items?: Item[];
   verdict?: Verdict;
+  /** The held verdict of a held run (EvaluateOptions.held), from its own list, in a held design's
+   *  words, written as a range end's is (endVerdict). Absent on any other run, and where the run's
+   *  list is one sheet item that is not ok. `verdict` is still written beside it. */
+  heldVerdict?: Verdict<HeldVerdict>;
 }
 
 /**
@@ -2149,6 +2158,13 @@ export interface SheetSweep {
    * consumer comparing samples never mistakes that for a design that merely misses a spec.
    */
   stands: boolean[];
+  /** Whether every number of each sample is there (isComplete), parallel to `x`. `stands` is still
+   *  written beside it. */
+  complete: boolean[];
+  /** Each sample's verdict, parallel to `x`: a design's where the design is sized at the sample, a
+   *  held design's where it is held there; null where the sampler gives none. A pass window is where
+   *  it is feasible or compliant and the sample is complete. */
+  verdicts: (DesignVerdict | HeldVerdict | null)[];
   /** Each sample's reads beyond a table (see OutsideTable, outsideIn), parallel to `x`: empty where
    *  every device was read on its table. A sample with any is the mark of a point the table does
    *  not answer for — its device is not sized, the margins that read it are null, and it is never
@@ -2189,6 +2205,8 @@ export interface SheetSweep2 {
   x: number[];
   y: number[];
   feasible: boolean[][];
+  /** Each cell's verdict, `[yi][xi]`: the verdict a run of the sheet at those values reads. */
+  verdicts: DesignVerdict[][];
   binding: (string | null)[][];
   /** Each cell's reads beyond a table (see SheetSweep.outside): empty where every device was read
    *  on its table. A cell with any is infeasible with no check to name (`binding` null). */

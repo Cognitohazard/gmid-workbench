@@ -21,7 +21,14 @@
 // Pure and deterministic; zero DOM. Every verdict is independent of the order relations are
 // declared in: relations are ordered by a total canonical key before anything reads them.
 
-import type { DeviceTable, EntryAbout, NetlistAbout, QAWarning, Scope } from '../types';
+import type {
+  DeviceTable,
+  EntryAbout,
+  NetlistAbout,
+  PlacementFault,
+  QAWarning,
+  Scope,
+} from '../types';
 import { compileExpr } from '../derive';
 import { scalarScope } from '../expr';
 import { formatQuantity } from '../units';
@@ -533,35 +540,48 @@ function placementProblems(
   device: string,
 ): void {
   const { err, say } = ctx;
-  const shape: NetlistAbout = { problem: 'placement', devices: [device] };
+  const placed = (fault: PlacementFault): NetlistAbout => ({
+    problem: 'placement',
+    devices: [device],
+    placement: fault,
+  });
   const list = placementsOf(raw);
   if (!list) {
     err(
       `${who}: nodes must be one placement {d, g, s, b} or a non-empty list of them` +
         (location === 'nodes' ? ', or "none"' : ''),
       location,
-      shape,
+      placed({ fault: 'shape', ...(location === 'nodes' ? { none: true as const } : {}) }),
     );
     return;
   }
   list.forEach((placement, i) => {
     const p = placement as unknown as Record<string, unknown>;
     const at = list.length > 1 ? `${who}, placement ${i}` : who;
+    const index = list.length > 1 ? { index: i } : {};
     for (const k of Object.keys(p))
       if (!NODE_KEYS.has(k))
         err(
           `${at}: nodes has unknown key "${k}" — a placement names d, g, s and b`,
           location,
-          shape,
+          placed({ fault: 'unknown-key', key: k, ...index }),
         );
     for (const t of TERMINALS) {
       if (p[t] === undefined)
-        err(`${at}: nodes names no ${t} — every terminal sits on a wire`, location, shape);
+        err(
+          `${at}: nodes names no ${t} — every terminal sits on a wire`,
+          location,
+          placed({ fault: 'no-wire', terminal: t, ...index }),
+        );
       else if (!ctx.badWire(p[t], at, location, device))
         ctx.touch(p[t] as string, `${at} ${t}`, t === 'g');
     }
     if (p.intent !== undefined && p.intent !== 'off')
-      err(`${at}: intent may only be "off", got ${JSON.stringify(p.intent)}`, location, shape);
+      err(
+        `${at}: intent may only be "off", got ${JSON.stringify(p.intent)}`,
+        location,
+        placed({ fault: 'intent', value: p.intent, ...index }),
+      );
     if (typeof p.d === 'string' && p.d === p.s)
       err(`${at}: drain and source are both on wire "${p.d}", which shorts the device`, location, {
         problem: 'short',
@@ -582,7 +602,7 @@ function placementProblems(
       `${who}: some placements put the gate on the drain wire and some do not — one sizing is one ` +
         `operating point, so a diode-connected device and a device that is not are separate blocks`,
       location,
-      shape,
+      placed({ fault: 'mixed-diode' }),
     );
   if (!givens) return;
   const diodeFlag: unknown = givens.diode;
@@ -1003,6 +1023,9 @@ interface TreeDevice {
   at: number[];
   /** The placements: the sizing sheet's own `nodes`, else the composing block's (see deviceWires). */
   placements?: DeviceNodes[];
+  /** Whether a `nodes` entry is written for the device, well formed or not: one that is not well
+   *  formed is that entry's own finding, not a device that names no wires. */
+  written: boolean;
   /** The block path of the sheet the placements are written in: the sizing sheet's own for its own
    *  `nodes`, the composing sheet's for a block's. For a device that names none, the sheet whose
    *  walk asks after it: its own where it is the top or joins its parent's walk, else its parent. */
@@ -1020,15 +1043,18 @@ function treeDevices(doc: SheetDoc): TreeDevice[] {
     const none = formatOf(d) === 2 && d.nodes === 'none';
     const path = chain.map((b) => b.name).join(PATH_SEP);
     const block = chain[chain.length - 1];
-    const byBlock = parent && block ? placementsOf(blockWires(parent, block)) : undefined;
+    const blockRaw = parent && block ? blockWires(parent, block) : undefined;
+    const byBlock = blockRaw !== undefined ? placementsOf(blockRaw) : undefined;
     if (d.givens && !(none && !byBlock)) {
       const own = formatOf(d) === 2 ? placementsOf(d.nodes) : undefined;
+      const written = (formatOf(d) === 2 && d.nodes !== undefined) || blockRaw !== undefined;
       const ownWalk = !parent || flattened(d);
       out.push({
         name: path || 'givens',
         givens: d.givens,
         chain,
         at,
+        written,
         ...((own ?? byBlock) ? { placements: own ?? byBlock } : {}),
         placedIn:
           own || (!byBlock && ownWalk)
@@ -1052,7 +1078,7 @@ function treeDevices(doc: SheetDoc): TreeDevice[] {
  *  own; see treeDevices). */
 export const unwiredDevices = (doc: SheetDoc): string[] =>
   treeDevices(doc)
-    .filter((d) => !d.placements)
+    .filter((d) => !d.placements && !d.written)
     .map((d) => d.name);
 
 /**
