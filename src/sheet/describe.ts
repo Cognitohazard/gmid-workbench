@@ -1249,11 +1249,11 @@ function netlistLines(n: NetlistAbout): Line[] {
 }
 
 /** Why a level cannot hold a wire, from its data: one line for each reason, then what to do. A
- *  param a hold re-solves is followed by its own action, holding the gate wire the hold keeps;
- *  where that is the only kind of reason, it is the whole of what to do. */
+ *  param a hold re-solves at a device's gate is followed by its own action, holding the gate wire
+ *  the hold keeps; where every reason is one of those, it is the whole of what to do. */
 function refusedLines(rs: readonly LevelRefusal[]): Line[] {
   const lines = rs.flatMap(refusalLines);
-  const onlyHeld = rs.every((r) => r.reason === 'class' && r.cls === 'held');
+  const onlyHeld = rs.every((r) => r.reason === 'class' && r.cls === 'held' && r.device);
   return onlyHeld
     ? lines
     : [...lines, t`Write the level as a number, or from values marked independent.`];
@@ -1269,7 +1269,7 @@ function refusalClause(r: LevelRefusal): Line {
         case 'solved':
           return t`the engine solves ${nm(r.name)}`;
         case 'held':
-          return t`a hold solves ${nm(r.name)} again`;
+          return t`the engine calculates ${nm(r.name)} again`;
         case 'unclassified':
           return t`${nm(r.name)} has no mark`;
       }
@@ -1303,9 +1303,10 @@ function refusalLines(r: LevelRefusal): Line[] {
         case 'held':
           return [
             t`The level reads ${nm(r.name)}, which the engine calculates again where the design is held, so the level is derived.`,
-            r.device !== undefined
-              ? t`Hold the gate wire of ${partName(r.device)} at the expression of its hold.`
-              : t`Hold the gate wire of that device at the expression of its hold.`,
+            // A hold that balances currents keeps no gate: no wire to hold instead.
+            ...(r.device !== undefined
+              ? [t`Hold the gate wire of ${partName(r.device)} at the expression of its hold.`]
+              : []),
           ];
         case 'unclassified':
           return [

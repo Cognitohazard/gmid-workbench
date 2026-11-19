@@ -1725,3 +1725,52 @@ describe('a range end behind a level that cannot hold a wire', () => {
     ]);
   });
 });
+
+describe('a level that reads a param a range end substitutes', () => {
+  it('a level may read a param that a range end substitutes; the substitute is not a reason', () => {
+    // The five-transistor OTA holds wire vdd at VDD. A range end that sets VDD to an expression
+    // is evaluated on the finished design, where its substitute is a number: the level is still
+    // the designer's, whatever the substitute reads (a loop through VDD itself, a solved param,
+    // an equation, a device quantity, or a number).
+    const ota = sheet('otas/five-transistor-ota.json');
+    for (const set of ['VDD*0.9', 'V_tail + 1.2', 'CM_in + 1.0', 'in__vgs', '1.62']) {
+      const doc = {
+        ...ota,
+        operatingRange: [...(ota.operatingRange ?? []), { name: 'vdd-lo', set: { VDD: set } }],
+      } as SheetDoc;
+      expect(levelEligibility(resolvedSheet(doc, REFS).doc, '', 'VDD'), set).toEqual({
+        kind: 'held',
+      });
+      const res = runSheet(doc, table, undefined, REFS);
+      expect(
+        res.warnings.filter(
+          (w) => w.about?.kind === 'netlist' && w.about.problem === 'level-refused',
+        ),
+        set,
+      ).toEqual([]);
+      expect(res.rangeEnds?.find((e) => e.name === 'vdd-lo')?.verdict, set).toBeDefined();
+      expectSame(res);
+    }
+  });
+});
+
+describe('a level that reads a value a hold balancing currents solves', () => {
+  it('gives the reason and what to write, and no gate wire to hold', () => {
+    // The CMOS inverter amplifier's I_bias is held by "I_bias - p__id": a hold that balances two
+    // currents and keeps no gate.
+    const inv = sheet('stages/cmos-inverter-amp.json');
+    const doc = {
+      ...inv,
+      levels: { ...(inv as { levels?: object }).levels, out: 'I_bias' },
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const item = res.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
+    expect(item?.status).toBe('failed');
+    expect(describeItem(item as Item).lines).toEqual([
+      'The statements of the sheet do not determine one design.',
+      'The level I_bias cannot hold wire out.',
+      'The level reads I_bias, which the engine calculates again where the design is held, so the level is derived.',
+      'Write the level as a number, or from values marked independent.',
+    ]);
+  });
+});

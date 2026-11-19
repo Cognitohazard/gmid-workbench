@@ -943,17 +943,31 @@ group('the texts of a finding with no item of its own', () => {
         ],
       ],
       [
-        // A param a hold re-solves, alone: holding the gate wire is the whole of what to do.
+        // A param a hold re-solves at a gate, alone: holding the gate wire is the whole of what to do.
         {
           problem: 'level-refused',
           wires: ['out'],
           level: 'V_s',
-          refused: [{ reason: 'class', name: 'V_s', cls: 'held' }],
+          refused: [{ reason: 'class', name: 'V_s', cls: 'held', device: 'casc' }],
         },
         [
           'The level V_s cannot hold wire out.',
           'The level reads V_s, which the engine calculates again where the design is held, so the level is derived.',
-          'Hold the gate wire of that device at the expression of its hold.',
+          'Hold the gate wire of part casc at the expression of its hold.',
+        ],
+      ],
+      [
+        // A hold that balances currents keeps no gate: the reason, then what to write.
+        {
+          problem: 'level-refused',
+          wires: ['out'],
+          level: 'I_bias',
+          refused: [{ reason: 'class', name: 'I_bias', cls: 'held' }],
+        },
+        [
+          'The level I_bias cannot hold wire out.',
+          'The level reads I_bias, which the engine calculates again where the design is held, so the level is derived.',
+          'Write the level as a number, or from values marked independent.',
         ],
       ],
       [
@@ -1549,7 +1563,7 @@ group('a range end that is not calculated', () => {
       [[{ reason: 'class', name: 'V_tail', cls: 'solved' }], 'because the engine solves V_tail'],
       [
         [{ reason: 'class', name: 'V_s', cls: 'held', device: 'casc' }],
-        'because a hold solves V_s again',
+        'because the engine calculates V_s again',
       ],
       [[{ reason: 'class', name: 'k', cls: 'unclassified' }], 'because k has no mark'],
       [[{ reason: 'unresolved', name: 'nope' }], 'because nope names nothing on the sheet'],
