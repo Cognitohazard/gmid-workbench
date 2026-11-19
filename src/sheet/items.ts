@@ -25,7 +25,10 @@ import type { EntryAbout, FindingAbout, NetlistAbout, QAWarning } from '../types
 import { syntaxAt } from '../expr';
 import {
   failsCause,
+  heldVerdictOf,
   isHeld,
+  type HeldVerdict,
+  type Verdict,
   type NotReadData,
   type RelationField,
   memberOf,
@@ -1078,16 +1081,17 @@ const readsOf = (expr: string): readonly string[] => {
  */
 export function unreadValues(doc: SheetDoc | undefined): ReadonlySet<string> {
   if (!doc || !Array.isArray(doc.equations)) return new Set();
-  const read = new Set<string>(doc.provides ?? []);
+  const list = <T>(x: readonly T[] | undefined): readonly T[] => (Array.isArray(x) ? x : []);
+  const read = new Set<string>(list(doc.provides));
   const sources: unknown[] = [
-    (doc.checks ?? []).map((c) => [c?.lhs, c?.rhs]),
-    (doc.params ?? []).map((p) => [p?.designConstraint, p?.solveFor, p?.hold]),
+    list(doc.checks).map((c) => [c?.lhs, c?.rhs]),
+    list(doc.params).map((p) => [p?.designConstraint, p?.solveFor, p?.hold]),
     doc.givens,
-    (doc.blocks ?? []).map((b) => b?.params),
+    list(doc.blocks).map((b) => b?.params),
     doc.levels,
     doc.elements,
     doc.analyses,
-    (doc.operatingRange ?? []).map((e) => e?.set),
+    list(doc.operatingRange).map((e) => e?.set),
   ];
   for (const text of stringsIn(sources)) for (const n of readsOf(text)) read.add(n);
   // What a read equation reads is read too, as far as the equations go.
@@ -1102,4 +1106,24 @@ export function unreadValues(doc: SheetDoc | undefined): ReadonlySet<string> {
       }
   }
   return new Set(doc.equations.map((e) => e?.name).filter((n) => !read.has(n)));
+}
+
+/** Whether a list is the one of a range end the engine does not calculate because the design point
+ *  gives no design (notCalculated). */
+export const isNotCalculated = (items: readonly Item[]): boolean =>
+  items.length === 1 &&
+  items[0].status === 'withheld' &&
+  items[0].on.some((o) => o.frame === 'design');
+
+/** The verdict of a range end, from its list, held design's words (heldVerdictOf). Absent where the
+ *  engine did not calculate the end: its list is one sheet item that is not ok, withheld on the
+ *  design point (notCalculated) or failed because the end's own entry is not well formed or does
+ *  not resolve. */
+export function endVerdict(
+  items: readonly Item[] | undefined,
+  unread?: ReadonlySet<string>,
+): Verdict<HeldVerdict> | undefined {
+  if (!items?.length) return undefined;
+  if (items.length === 1 && items[0].kind === 'sheet' && items[0].status !== 'ok') return undefined;
+  return heldVerdictOf(items, unread);
 }

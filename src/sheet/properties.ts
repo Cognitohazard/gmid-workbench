@@ -29,7 +29,7 @@ import {
 } from './types';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { givesValue } from './items';
-import { givesDesign } from './states';
+import { isComplete } from './states';
 import { solvedRelation, validateSheet } from './validate';
 
 /** The factor a property is moved by each way: 1 % up, and down by the same ratio. */
@@ -115,7 +115,7 @@ export function devicePropertySensitivities(
     return empty(
       `The sheet reads a device beyond its table at its own values (${baseOutside.map(outsideMessage).join('; ')}).`,
     );
-  if (!givesDesign(base)) return empty('The sheet does not evaluate at its own values.');
+  if (!isComplete(base)) return empty('The sheet does not evaluate at its own values.');
   const pinned = solvedValuesIn(r.doc, base);
 
   // Rows. The solved values are held, so they cannot move; a requirement whose two sides no
@@ -159,7 +159,7 @@ export function devicePropertySensitivities(
       const up = at(PROPERTY_FACTOR);
       const down = at(1 / PROPERTY_FACTOR);
       const span = PROPERTY_FACTOR - 1 / PROPERTY_FACTOR;
-      if (!givesDesign(up) || !givesDesign(down)) {
+      if (!isComplete(up) || !isComplete(down)) {
         columns.push({
           device,
           key,

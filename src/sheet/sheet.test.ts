@@ -4663,10 +4663,9 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(res.rangeEnds?.[0].error).toMatch(/did not evaluate to a finite number/);
   });
 
-  it('a range end that does not comply can NEVER chart non-negative — na fails it closed, on-chart', () => {
-    // Hard `na` fails a range end closed while contributing no margin; without the floor a
-    // passing sibling check painted the failing end at +margin. sqrt(6 - T) is finite at the
-    // base (T=5) and lo end (T=3), na at the hi end (T=7).
+  it('a range end where a hard requirement gives no number never charts a non-negative margin', () => {
+    // Hard `na` contributes no margin; a passing sibling check must not paint the end at +margin.
+    // sqrt(6 - T) is finite at the base (T=5) and lo end (T=3), na at the hi end (T=7).
     const doc = mk({
       checks: [
         { id: 'node-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'x_floor' },
@@ -4678,7 +4677,10 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(res.rangeEnds?.[1].state).toBe('does-not-comply');
     const sw = sweepSheet(doc, 'x_floor', dev, 2);
     const hiCurve = sw.checks.find((r) => r.id === 'hi@');
-    expect(hiCurve!.marginPct.every((m) => m !== null && m < 0)).toBe(true);
+    // A hard requirement that gives no number leaves the end undetermined, not failing: the curve
+    // has a gap there, and never a non-negative margin.
+    expect(res.rangeEnds?.[1].verdict?.verdict).toBe('undetermined');
+    expect(hiCurve!.marginPct).toEqual([null, null]);
   });
 
   it("a range end's error prefers the SOLVER's message over whatever error landed last", () => {

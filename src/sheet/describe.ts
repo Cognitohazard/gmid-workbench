@@ -37,7 +37,7 @@ import type {
   Verdict,
   WithheldOn,
 } from './states';
-import { noDesignOn } from './states';
+import { incompleteOn } from './states';
 
 // ── Numbers, units and names as a message quotes them ────────────────────────────────────────
 
@@ -1679,10 +1679,13 @@ export const notAskedText = (what: 'range end' | 'held point', name: string): Fi
       : t`The engine did not run the condition ${nm(name)}, because the design point has no design.`,
   ]);
 
-/** Why a run gives no design to read (noDesignOn), one sentence group for each item that leaves it
- *  none, in the list's order. Never empty: a run with no such item reads that the evaluation did not
- *  complete, as a refusal with no reason is indistinguishable from a verdict. */
-export function noDesignText(items: readonly Item[]): string[] {
-  const why = noDesignOn(items).map((f) => describe({ ...f, status: 'failed' }).lines.join(' '));
+/** Why a run is not complete (incompleteOn): the text of each failed item whose numbers it does not
+ *  have, in the list's order; a withheld item follows from one of them. Never empty: a run with no
+ *  such item reads that the evaluation did not complete, as a refusal with no reason is
+ *  indistinguishable from a verdict. */
+export function incompleteText(items: readonly Item[]): string[] {
+  const why = incompleteOn(items)
+    .filter((i) => i.status === 'failed')
+    .map((i) => describe(i).lines.join(' '));
   return why.length ? why : ['The evaluation did not complete.'];
 }

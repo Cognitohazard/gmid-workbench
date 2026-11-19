@@ -9,8 +9,8 @@ import { resolvedSheet } from './resolve';
 import { sheetSensitivities } from './sensitivity';
 import { devicePropertySensitivities } from './properties';
 import { givesValue, unreadValues } from './items';
-import { OPEN_RULINGS, givesDesign, verdictOf } from './states';
-import { noDesignText, standardProblems } from './describe';
+import { OPEN_RULINGS, isComplete, verdictOf } from './states';
+import { incompleteText, standardProblems } from './describe';
 import { stands, unfinishedBecause, withoutRange, type SheetDoc, type SheetResult } from './types';
 import { sheet, table, REFS } from './library.fixtures';
 
@@ -37,14 +37,14 @@ group('an equation that reads a name no entry declares', () => {
     const res = evaluated(ghost);
     expect(stands(res)).toBe(true);
     expect(res.feasible).toBe(true);
-    expect(givesDesign(res)).toBe(false);
+    expect(isComplete(res)).toBe(false);
     expect(verdictOf(res.items ?? []).verdict).toBe('undetermined');
     expect(res.items?.find((i) => i.name === 'ghost')).toMatchObject({
       status: 'failed',
       cause: { kind: 'cannot-evaluate', data: { why: 'not-defined', name: 'undeclared_name' } },
     });
     // The same sheet without it gives a design.
-    expect(givesDesign(evaluated(soft(ota)))).toBe(true);
+    expect(isComplete(evaluated(soft(ota)))).toBe(true);
   });
 
   it('leaves a value that reads it with no number, though the withheld record holds none', () => {
@@ -86,7 +86,7 @@ group('an equation that reads a name no entry declares', () => {
   it('says why there is no design, from the text module', () => {
     const res = evaluated(ghost);
     expect(unfinishedBecause(res)).toEqual(['the evaluation did not complete']);
-    const why = noDesignText(res.items ?? []);
+    const why = incompleteText(res.items ?? []);
     expect(why).toHaveLength(1);
     for (const l of why) expect(standardProblems(l)).toEqual([]);
   });
@@ -114,7 +114,7 @@ group('a design that rests on an assumed level', () => {
   it('stands today and gives no design to read', () => {
     const res = evaluated(assumed);
     expect(stands(res)).toBe(true);
-    expect(givesDesign(res)).toBe(false);
+    expect(isComplete(res)).toBe(false);
   });
 });
 
@@ -165,5 +165,56 @@ group('a sweep', () => {
       stands: true,
     }));
     expect(s.values.find((c) => c.name === 'y')?.y).toEqual([null, null, null]);
+  });
+});
+
+group('a range end', () => {
+  it('reads its verdict where today’s state complies, and charts no margin where it is undetermined', () => {
+    const res = runSheet(ghost, table, undefined, REFS);
+    for (const e of res.rangeEnds ?? []) {
+      expect(e.state).toBe('complies');
+      expect(e.verdict?.verdict).toBe('undetermined');
+    }
+    const s = sweepSheet(ghost, 'gm_id_in', table, 3, undefined, REFS);
+    // An undetermined end charts a gap, and a non-compliant one a negative margin: none charts the
+    // room a compliant end would have.
+    const ends = s.checks.filter((c) => c.rangeEnd !== undefined);
+    expect(ends.flatMap((c) => c.marginPct).filter((m) => m !== null && m >= 0)).toEqual([]);
+    expect(ends.flatMap((c) => c.marginPct).filter((m) => m === null).length).toBeGreaterThan(0);
+    // Without the equation, the same ends chart a margin.
+    const plain = sweepSheet(soft(ota), 'gm_id_in', table, 3, undefined, REFS);
+    for (const c of plain.checks.filter((x) => x.rangeEnd !== undefined))
+      expect(c.marginPct.every((m) => typeof m === 'number')).toBe(true);
+  });
+
+  it('has no verdict where the engine did not calculate it, and names why', () => {
+    const res = runSheet(
+      {
+        ...ota,
+        operatingRange: ota.operatingRange?.map((e, k) => (k ? e : { ...e, set: { CM_dc: '((' } })),
+      },
+      table,
+      undefined,
+      REFS,
+    );
+    const [bad, other] = res.rangeEnds ?? [];
+    expect(bad.verdict).toBeUndefined();
+    expect(bad.items).toEqual([
+      expect.objectContaining({
+        kind: 'sheet',
+        status: 'failed',
+        cause: expect.objectContaining({ kind: 'cannot-evaluate' }),
+      }),
+    ]);
+    expect(other.verdict?.verdict).toBeDefined();
+    // The sheet's own verdict is not feasible while the finding about the end stands.
+    expect(res.verdict?.verdict).not.toBe('feasible');
+  });
+
+  it('is not complete where it read no number, for the sensitivity view of a check at that end', () => {
+    const res = runSheet(ghost, table, undefined, REFS);
+    for (const e of res.rangeEnds ?? []) expect(isComplete(e)).toBe(false);
+    for (const e of runSheet(soft(ota), table, undefined, REFS).rangeEnds ?? [])
+      expect(isComplete(e)).toBe(true);
   });
 });

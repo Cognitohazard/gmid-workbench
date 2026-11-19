@@ -6,7 +6,7 @@
 // level derived from it is fed back into the design. Pure data; zero DOM imports.
 
 import type { OutsideTable, QAWarning } from '../types';
-import type { DesignVerdict, Item, Verdict } from './states';
+import type { DesignVerdict, HeldVerdict, Item, Verdict } from './states';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
 import { BINDABLE } from '../device';
@@ -1298,8 +1298,13 @@ export interface RangeEndReport {
    *  child). Reported rather than warned, like SizingReport.assumed: it is a property of what
    *  the author wrote down, and the fix is to author the current explicitly. */
   assumedSource?: string[];
-  /** The run's items with their statuses (SheetResult.items); absent where nothing was run. */
+  /** The run's items with their statuses (SheetResult.items). An end the engine did not calculate
+   *  has one sheet item: withheld on the design point's items where the design point gives no
+   *  design, or failed with the finding about its own entry. */
   items?: Item[];
+  /** The end's verdict, from its items (endVerdict). Absent where the engine did not calculate
+   *  the end. `state` is still written beside it. */
+  verdict?: Verdict<HeldVerdict>;
 }
 
 /** A range end's outcome — one compliance point's. `not-run` and `no-answer` are first-class

@@ -81,7 +81,9 @@ import {
   noSolutionCause,
   verdictOf,
   type Cause,
+  type HeldVerdict,
   type Item,
+  type Verdict,
   type ItemRef,
   type RelationField,
   type SearchData,
@@ -93,7 +95,9 @@ import {
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { failOn, solveFailureOf } from './derived';
 import {
+  endVerdict,
   itemsOf,
+  notCalculated,
   resolveWithheld,
   searchItems,
   under,
@@ -4165,7 +4169,8 @@ function evaluateWithRange(
     // failed solve did not find is withheld from them, and what is left was never landed on as a
     // design. Reporting the point that would have been asked about from those is reporting a
     // phantom, the same reason a failed solve's probe is never reported as a landing.
-    return { ...base, rangeEnds: rangeEnds.map((e) => unrunEnd(e.name, 'not-run')) };
+    const items = notCalculated(base.items ?? []);
+    return { ...base, rangeEnds: rangeEnds.map((e) => unrunEnd(e.name, 'not-run', { items })) };
   }
   // A design resting on an assumed voltage has no answer at a range end: holding a typed guess
   // fixed while the range moves around it measures the guess. Asked, and declined with the
@@ -4174,8 +4179,9 @@ function evaluateWithRange(
   if (assumed.length) {
     const error = assumedLevelRefusal(assumed);
     const nodes = unwalkedReport(doc);
+    const items = notCalculated(base.items ?? []);
     const reports = rangeEnds.map((e) =>
-      unrunEnd(e.name, 'no-answer', { error, ...(nodes ? { nodes } : {}) }),
+      unrunEnd(e.name, 'no-answer', { error, ...(nodes ? { nodes } : {}), items }),
     );
     return { ...base, rangeEnds: reports, complies: false };
   }
@@ -4184,6 +4190,15 @@ function evaluateWithRange(
   const reports = rangeEnds.map((e) => runRangeEnd(e, held, base, table, resolveDevice, settings));
   return { ...base, rangeEnds: reports, complies: reports.every((r) => r.state === 'complies') };
 }
+
+/** A range end's verdict from its list (endVerdict), where the engine calculated the end. */
+export const withVerdict = (
+  items: readonly Item[] | undefined,
+  doc: SheetDoc,
+): { verdict?: Verdict<HeldVerdict> } => {
+  const verdict = endVerdict(items, unreadValues(doc));
+  return verdict ? { verdict } : {};
+};
 
 /** A range end's report with nothing evaluated in it: no outcomes, no landing, no warnings, and
  *  whatever `extra` says (an error, the point asked about, the wiring report) over that. */
@@ -4414,6 +4429,7 @@ function runRangeEnd(
     ...(res.ranges ? { ranges: res.ranges } : {}),
     warnings: res.warnings,
     ...(res.items ? { items: res.items } : {}),
+    ...withVerdict(res.items, held.doc),
     ...(err !== undefined ? { error: err } : {}),
     ...(outside.length ? { outside } : {}),
     ...(res.nodes ? { nodes: res.nodes } : {}),

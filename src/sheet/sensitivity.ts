@@ -13,7 +13,6 @@ import {
   choiceKnobs,
   outsideIn,
   RANGE_END_SEP,
-  rangeEndBroke,
   engineSolved,
   OWN_DEVICE,
   sweepable,
@@ -35,7 +34,7 @@ import type { Settings } from './settings';
 import { validateSheet } from './validate';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { givesValue } from './items';
-import { givesDesign } from './states';
+import { isComplete } from './states';
 import { outsideMessage } from './describe';
 
 /**
@@ -190,8 +189,8 @@ export function sheetSensitivities(
     ? opts.check.slice(0, opts.check.indexOf(RANGE_END_SEP))
     : undefined;
   const endBroke = (res: SheetResult): boolean =>
-    (res.rangeEnds ?? []).some((e) => e.name === end && rangeEndBroke(e));
-  const whole = (res: SheetResult): boolean => givesDesign(res) && !endBroke(res);
+    (res.rangeEnds ?? []).some((e) => e.name === end && !isComplete(e));
+  const whole = (res: SheetResult): boolean => isComplete(res) && !endBroke(res);
   const base = at({});
   const baseOutside = outsideIn(base);
   if (baseOutside.length) {
@@ -201,7 +200,7 @@ export function sheetSensitivities(
         `around`,
     );
   }
-  if (!givesDesign(base)) {
+  if (!isComplete(base)) {
     return dead(
       'the sheet does not evaluate at its own values, so there is no point to differentiate ' +
         'around — fix the evaluation first',

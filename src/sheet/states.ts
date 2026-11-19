@@ -610,16 +610,21 @@ export interface Verdict<V extends string = DesignVerdict> {
   readonly held?: readonly ItemRef[];
 }
 
-/** The items that leave a run with no design to read: each failed item other than a requirement,
- *  since a requirement that fails or gives no number is a finding about a design, not the want of
- *  one. Empty where the run gives a design. */
-export const noDesignOn = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
-  failedItems(items).filter((f) => f.kind !== 'requirement');
+/** The items whose numbers a run does not have: each item withheld, and each failed other than a
+ *  requirement that fails, whose two sides are there. Empty where the run is complete. */
+export const incompleteOn = (items: readonly Item[]): Item[] =>
+  items.filter(
+    (i) =>
+      i.status === 'withheld' ||
+      (i.status === 'failed' && !(i.kind === 'requirement' && i.cause.kind === 'fails')),
+  );
 
-/** Whether a run gives a design to read, from its items (noDesignOn): the reading the sensitivity
- *  views take where they ask whether a point is one to differentiate around. */
-export const givesDesign = (res: { items?: readonly Item[] }): boolean =>
-  res.items !== undefined && noDesignOn(res.items).length === 0;
+/** Whether every number of a run is there, from its items (incompleteOn). It answers completeness,
+ *  not what the design is: a run where a hard requirement fails and a search also fails reads
+ *  non-compliant, and is not complete. The sensitivity views difference around a run only where it
+ *  is complete. */
+export const isComplete = (res: { items?: readonly Item[] }): boolean =>
+  res.items !== undefined && incompleteOn(res.items).length === 0;
 
 /** Whether an item is a solved param the run held at a given value instead of solving. */
 export const isHeld = (i: Item): boolean => i.status === 'ok' && i.attributes?.kind === 'held';

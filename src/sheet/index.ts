@@ -33,8 +33,15 @@ import type {
 } from './types';
 import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
-import { evaluateSheet, inheritedPolarityWarnings, type DeviceResolver } from './eval';
-import { aboutTheSheet, givesValue, notCalculated, unreadValues, withFindings } from './items';
+import { evaluateSheet, inheritedPolarityWarnings, withVerdict, type DeviceResolver } from './eval';
+import {
+  aboutTheSheet,
+  givesValue,
+  isNotCalculated,
+  notCalculated,
+  unreadValues,
+  withFindings,
+} from './items';
 import { verdictOf, type DesignVerdict } from './states';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { namedResults } from './sensitivity';
@@ -129,15 +136,6 @@ function sampleValue(res: SheetResult | undefined, name: string): number | null 
   return Number.isFinite(v) ? v : null;
 }
 
-/** The findings of validation the design point's list takes: all but those about one range end,
- *  which that end's own list takes (see runSheet). */
-function designFindings(doc: SheetDoc, pre: readonly QAWarning[]): QAWarning[] {
-  const endNames = new Set((doc.operatingRange ?? []).map((e) => e?.name));
-  return pre.filter(
-    (w) => !(w.rule === 'sheet-range' && w.location !== undefined && endNames.has(w.location)),
-  );
-}
-
 /** The verdict of one evaluated sample, with validation's findings on its items as runSheet puts
  *  them: the verdict a script that runs the same values reads. */
 const sampleVerdict = (
@@ -178,10 +176,14 @@ export function runSheet(
   const bound = inheritedPolarityWarnings(r.doc, table, resolveDevice);
   // What validation found is on the items too, each on the entry it names: a finding about one
   // range end on the sheet item of that end's own list, which an end that was not run has too.
-  const endNames = new Set((r.doc.operatingRange ?? []).map((e) => e?.name));
+  const endNames = new Set(
+    (Array.isArray(r.doc.operatingRange) ? r.doc.operatingRange : []).map((e) => e?.name),
+  );
   const onEnd = (w: QAWarning): boolean =>
     w.rule === 'sheet-range' && w.location !== undefined && endNames.has(w.location);
-  const items = withFindings(res.items ?? [], designFindings(r.doc, pre), r.doc, 'validation');
+  // A finding about one range end is on the design point's list too: the sheet carries the end, and
+  // its verdict is not feasible while an entry of it is not well formed.
+  const items = withFindings(res.items ?? [], pre, r.doc, 'validation');
   // A range end's run evaluates the entries of the sheet, so its list takes validation's findings
   // about them the way the design point's list does. A finding about the sheet as a whole is read in
   // the design point's list; the end is then not calculated, as it is where the design point gives
@@ -191,7 +193,7 @@ export function runSheet(
   const wholeSheet = errors.length > entries.length;
   const rangeEnds = res.rangeEnds?.map((e) => {
     const own = pre.filter((w) => w.severity === 'error' && onEnd(w) && w.location === e.name);
-    const notRun = e.state === 'not-run' || wholeSheet;
+    const notRun = !e.items?.length || isNotCalculated(e.items) || wholeSheet;
     if (!notRun && !own.length && !entries.length) return e;
     const list = withFindings(
       notRun
@@ -201,7 +203,8 @@ export function runSheet(
       r.doc,
       'validation',
     );
-    return { ...e, items: list };
+    const { verdict: _verdict, ...rest } = e;
+    return { ...rest, items: list, ...withVerdict(list, r.doc) };
   });
   return {
     ...withValidation([...pre, ...bound], res),
@@ -298,14 +301,15 @@ function worstBy(
  * a bottom clip would put a failure on the chart that the engine never established.
  */
 function rangeEndMargin(e: RangeEndReport): number | null {
-  if (e.state === 'not-run' || e.state === 'no-answer') return null;
-  if (e.error !== undefined) return -MARGIN_PCT_CAP;
+  const verdict = e.verdict?.verdict;
+  if (verdict === undefined || verdict === 'undetermined') return null;
+  if (verdict === 'no-operating-point') return -MARGIN_PCT_CAP;
   const found = worstBy(treeCheckResults(e), isMeasurable);
   const worst = found === undefined ? null : clampMargin(found.marginPct);
   // An end that DOES NOT COMPLY must never chart non-negative: hard `na` fails the run closed
   // while contributing no margin, so without this floor a passing sibling check could paint a
   // failing range end at +margin.
-  if (e.state !== 'complies' && (worst === null || worst >= 0)) return -MARGIN_PCT_CAP;
+  if (verdict !== 'compliant' && (worst === null || worst >= 0)) return -MARGIN_PCT_CAP;
   return worst ?? 0;
 }
 
@@ -426,7 +430,7 @@ export function sweepOf(
   // structurally; min is one.
   const pre = [...r.warnings, ...validateSheet(withParams(r.doc, { [param]: v.min }))];
   const blocked = pre.some((w) => w.severity === 'error');
-  const findings = designFindings(r.doc, pre);
+  const findings = pre;
   /** Whether a sample passes: its verdict is feasible, where the caller gives one. */
   const passes = (s: SweepSample): boolean =>
     s.verdict !== undefined ? s.verdict === 'feasible' : !blocked && s.feasible;
@@ -679,7 +683,7 @@ export function sweepSheet2(
     ...validateSheet(withParams(r.doc, { [paramX]: px.min, [paramY]: py.min })),
   ];
   const blocked = pre.some((w) => w.severity === 'error');
-  const findings = designFindings(r.doc, pre);
+  const findings = pre;
 
   const x = Array.from({ length: pts }, (_, i) => px.min + ((px.max - px.min) * i) / (pts - 1));
   const y = Array.from({ length: pts }, (_, i) => py.min + ((py.max - py.min) * i) / (pts - 1));

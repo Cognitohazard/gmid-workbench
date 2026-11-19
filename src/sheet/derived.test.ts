@@ -1068,7 +1068,12 @@ describe('the items of the second audit', () => {
     const d = clone(tail);
     d.operatingRange![0].set = { NOPE: '1' };
     const res = lib(d);
-    expect(top(res, 'sheet', '')?.status).toBe('ok');
+    // The design point's list holds it too, so the sheet's verdict is not feasible while it stands.
+    expect(top(res, 'sheet', '')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'not-read', data: { entry: 'range-end' } },
+    });
+    expect(res.verdict?.verdict).not.toBe('feasible');
     expect(res.rangeEnds?.[0].items?.[0]).toMatchObject({
       status: 'failed',
       cause: {
