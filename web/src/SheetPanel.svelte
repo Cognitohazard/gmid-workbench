@@ -1646,7 +1646,7 @@
       return own && own.status !== 'ok' ? describeItem(own, within).segments : [];
     }
     if (c.verdict.verdict === 'feasible') return [];
-    const lines: Line[] = [...verdictText(c.verdict)];
+    const lines: Line[] = [...verdictText(c.verdict, within)];
     for (const f of c.verdict.failed) {
       const item = itemAt(c.items, f);
       if (item) lines.push(...describeItem(item, within).segments);
@@ -2090,9 +2090,6 @@
           beyond the table: {beyondText(r)} — not sized
         </div>
       {/each}
-    {:else if c?.sizing?.error}
-      <!-- As on the sheet: the reason the device cannot be sized, until its item says it. -->
-      <div class="perr" title={c.sizing.error}>{c.sizing.error}</div>
     {/if}
     {#if why.length}
       <div class="sblock" data-block-reason>
@@ -2288,10 +2285,6 @@
               >beyond the table: {beyondText(r)} — not sized</span
             >
           {/each}
-        {:else if result.sizing.error}
-          <!-- The device's item does not yet say why it cannot be sized (a sweep the table
-               lacks), so the sizing report's own words stay until it does. -->
-          <span class="perr" title={result.sizing.error}>{result.sizing.error}</span>
         {/if}
         {@render biasCtl(cfg.givens, result.sizing, [])}
       {/if}

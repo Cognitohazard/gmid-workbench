@@ -365,8 +365,8 @@ test('design sheet: two loaded devices sharing a label are each individually sel
     'data-verdict',
     'undetermined',
   );
-  await expect(sp.locator('.suse', { hasText: 'cs' }).locator('.perr')).toContainText(
-    'no vds sweep',
+  await expect(sp.locator('.suse', { hasText: 'cs' }).locator('[data-block-reason]')).toContainText(
+    'The table holds no sweep of vds.',
   );
   await expect(sp.locator('.pwarn', { hasText: 'device "' })).toHaveCount(0);
 
@@ -406,7 +406,9 @@ test('design sheet: a table that lacks a sweep the sheet uses refuses the device
   await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
   await expect(sp.locator('[data-verdict-reason]')).toContainText('cannot be sized');
   await expect(sp.locator('.shead .bind')).toHaveCount(0);
-  await expect(sp.locator('.shead .perr')).toContainText('no vsb sweep');
+  await expect(sp.locator('[data-verdict-reason]')).toContainText(
+    'The table holds no sweep of vsb.',
+  );
   // The block under it has its source at its body, and still sizes.
   await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveAttribute('data-verdict', 'feasible');
 
