@@ -1652,13 +1652,16 @@
   /** Why a block's verdict is what it is, in the core's words, read in the block's own list; for a
    *  block that was not calculated, its own sheet item's text. */
   const blockLines = (c: SheetBlockReport, within: readonly string[]): readonly Line[] => {
-    if (!c.verdict) {
+    // A block in a sized run carries a design verdict, one where the hardware is held a held
+    // verdict; a block that was not calculated carries neither.
+    const v = c.verdict ?? c.heldVerdict;
+    if (!v) {
       const own = c.items?.find((i) => i.kind === 'sheet' && !i.path.length);
       return own && own.status !== 'ok' ? describeItem(own, within).segments : [];
     }
-    if (c.verdict.verdict === 'feasible') return [];
-    const lines: Line[] = [...verdictText(c.verdict, within)];
-    for (const f of c.verdict.failed) {
+    if (v.verdict === 'feasible' || v.verdict === 'compliant') return [];
+    const lines: Line[] = [...verdictText(v, within)];
+    for (const f of v.failed) {
       const item = itemAt(c.items, f);
       if (item) lines.push(...describeItem(item, within).segments);
     }
@@ -2037,7 +2040,7 @@
        calculated, and says why in its own item's words. It still renders — its device control is
        how a refusal is fixed. -->
   {@const within = [...names, c?.name ?? block?.name ?? '']}
-  {@const bv = c?.verdict?.verdict}
+  {@const bv = (c?.verdict ?? c?.heldVerdict)?.verdict}
   {@const look = lookOf(bv)}
   {@const why = c ? blockLines(c, within) : []}
   <div
@@ -3471,11 +3474,13 @@
   }
   /* the left rail follows the block's verdict look: solid for a verdict, dashed where the block
      was not calculated or is undetermined */
-  .suse[data-verdict='feasible'] {
+  .suse[data-verdict='feasible'],
+  .suse[data-verdict='compliant'] {
     border-left-color: var(--ok);
   }
   .suse[data-verdict='non-compliant'],
-  .suse[data-verdict='infeasible'] {
+  .suse[data-verdict='infeasible'],
+  .suse[data-verdict='no-operating-point'] {
     border-left-color: var(--err);
   }
   .suse[data-verdict='undetermined'],
