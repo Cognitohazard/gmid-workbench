@@ -590,7 +590,7 @@ function placementProblems(
       `${who}: the nodes put the gate on the drain wire, which is a diode connection, but the ` +
         `givens say diode: false — drop the flag, or move the gate`,
       location,
-      { problem: 'diode-flag', devices: [device] },
+      { problem: 'diode-flag', devices: [device], diodeFlag: false },
     );
   if (diodes === 0 && diodeFlag === true)
     err(
@@ -598,7 +598,7 @@ function placementProblems(
         `and the drain on "${String(list[0]?.d)}" — a diode connection is the gate on the drain ` +
         `wire. Drop the flag, or wire it`,
       location,
-      { problem: 'diode-flag', devices: [device] },
+      { problem: 'diode-flag', devices: [device], diodeFlag: true },
     );
 }
 

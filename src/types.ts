@@ -132,6 +132,8 @@ export interface NetlistAbout {
   readonly devices?: readonly string[];
   /** For a selector the table contradicts: the param. */
   readonly param?: string;
+  /** For a diode flag the wires contradict: the flag as the givens state it. */
+  readonly diodeFlag?: boolean;
 }
 
 export interface ImportError {

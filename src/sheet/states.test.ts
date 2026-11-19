@@ -3,6 +3,7 @@
 // module that builds today's messages from a cause's data.
 
 import { describe as group, it, expect } from 'vitest';
+import { syntaxAt } from '../expr';
 import { generateDemoDevice } from '../demo';
 import { evaluateSheet } from './index';
 import {
@@ -15,6 +16,8 @@ import {
   noSolutionCause,
   legacyDesignFailure,
   verdictOf,
+  type NotReadData,
+  type NoCrossingData,
   type Cause,
   type DidNotSettleData,
   type Item,
@@ -741,7 +744,7 @@ group('the texts a reader sees, by the message standard', () => {
       expect(standardProblems(l)).toEqual([]);
   });
 
-  it('gives the margin of a check whose limit is zero in its own unit, not as a percentage', () => {
+  it('gives no margin line against a limit of zero, and a negative value with the minus sign', () => {
     const zero = failsCause({
       kind: 'spec',
       text: { lhs: 'x', op: '<=', rhs: '0' },
@@ -751,7 +754,24 @@ group('the texts a reader sees, by the message standard', () => {
       marginPct: -2e300,
       unit: 'V',
     });
-    expect(textOf(zero).lines).toContain('The margin is −2 V.');
+    // Against a limit of zero the margin would repeat the value; the line is left out.
+    expect(textOf(zero).lines).toEqual([
+      'The check fails.',
+      'x is 2 V, and the check requires at most 0 V.',
+    ]);
+    // A value below zero takes the minus sign, not the hyphen.
+    expect(
+      textOf(
+        failsCause({
+          kind: 'spec',
+          text: { lhs: 'x', op: '>=', rhs: '0' },
+          lhsValue: -1.55,
+          rhsValue: 0,
+          margin: -1.55,
+          marginPct: -2e300,
+        }),
+      ).lines,
+    ).toEqual(['The check fails.', 'x is −1.55, and the check requires at least 0.']);
   });
 
   it('says what a held point that was not run reads', () => {
@@ -813,12 +833,12 @@ group('the texts of a finding with no item of its own', () => {
         { problem: 'one-terminal', wires: ['lone'] },
         [
           'Only one terminal names wire lone.',
-          'A wire joins two terminals or more, or the sheet holds it, or it is a port.',
+          'A wire joins two terminals or more, or the sheet gives it a level, or it is a port.',
         ],
       ],
       [
         { problem: 'level-unnamed', wires: ['zz'] },
-        ['The sheet holds wire zz, but no terminal, element or port names zz.'],
+        ['The sheet gives wire zz a level, but no terminal, element or port names zz.'],
       ],
       [
         { problem: 'unwired', devices: ['givens', 'tail'] },
@@ -827,6 +847,14 @@ group('the texts of a finding with no item of its own', () => {
       [
         { problem: 'diode-flag', devices: ['load'] },
         ['The wires of part load and its diode flag disagree.'],
+      ],
+      [
+        { problem: 'diode-flag', devices: ['ldr'], diodeFlag: false },
+        ['The wires of part ldr put its gate on its drain, but its diode flag is off.'],
+      ],
+      [
+        { problem: 'diode-flag', devices: ['ldr'], diodeFlag: true },
+        ['The diode flag of part ldr is on, but its wires do not put its gate on its drain.'],
       ],
       [
         { problem: 'placement', devices: ['load'] },
@@ -910,7 +938,7 @@ group('the texts of the data an item now carries', () => {
       }),
       [
         'The statements of the sheet do not determine one design.',
-        'V_out has a design constraint and a hold, and only one statement may set it.',
+        'V_out has a constraint and a hold, and only one may set it.',
       ],
     );
   });
@@ -936,7 +964,7 @@ group('the texts of the data an item now carries', () => {
         kind: 'cannot-evaluate',
         data: { why: 'not-defined', name: 'tail', reason: '', inputs: ['vds_t'] },
       }),
-      ['This block is not calculated, because its parent sheet gives it no value for vds_t.'],
+      ['Block tail is not calculated, because its parent sheet gives it no value for vds_t.'],
     );
   });
 
@@ -973,7 +1001,7 @@ group('the texts of the data an item now carries', () => {
     check(nf(['a']), ['y gives no number.', 'y reads a, which gives no number.']);
     check(nf([]), [
       'y gives no number.',
-      'Each name that y reads gives a number, so its own arithmetic gives none.',
+      'Every name that y reads gives a number, but the expression of y gives none.',
     ]);
   });
 });
@@ -996,5 +1024,236 @@ group('the text of a block’s part read beyond its table, in its parent’s lis
       'Change vsb_rc in block ref_casc, or load a table that holds this source-body voltage.',
     ]);
     for (const l of describe(i).segments) expect(standardProblems(l)).toEqual([]);
+  });
+});
+
+group('a text for every item the types allow', () => {
+  it('describe gives lines, and never throws, on odd but type-correct data of every cause', () => {
+    const rel = {
+      lhs: '',
+      rhs: '',
+      field: 'designConstraint' as const,
+      reads: { lhs: [], rhs: [] },
+    };
+    const sd: SearchData = {
+      path: [],
+      unknown: '',
+      held: false,
+      relation: rel,
+      range: { param: '', range: [Number.NaN, Number.NaN], from: 'author', note: '' },
+      searched: [Number.NaN, Number.NaN],
+      stage: 'sheet',
+    };
+    const end = { x: Number.NaN, lhs: Number.NaN, rhs: Number.NaN };
+    const read = { ends: [end, end] as const, ended: { kind: 'flat' as const } };
+    const odd = (op: string) =>
+      ({ lhs: '', op, rhs: '' }) as unknown as { lhs: string; op: '>='; rhs: string };
+    const causes: Cause[] = [
+      { kind: 'not-read', data: { why: 'format', where: '', message: '' } },
+      { kind: 'not-read', data: { why: 'reference', where: '', message: '' } },
+      { kind: 'not-read', data: { why: 'field', where: '', message: '', entry: 'param' } },
+      ...(
+        [
+          'decision-missing',
+          'decision-twice',
+          'assumed-level',
+          'range-outside',
+          'netlist',
+          'loop',
+          'operating-range',
+          'entry',
+        ] as const
+      ).map((why): Cause => ({ kind: 'not-determined', data: { why, names: [], message: '' } })),
+      {
+        kind: 'not-determined',
+        data: { why: 'netlist', names: [], message: '', netlist: { problem: 'short' } },
+      },
+      {
+        kind: 'outside-table',
+        data: { device: '', quantity: '', asked: Number.NaN, held: [0, 0] },
+      },
+      ...(
+        ['no-sweep', 'no-column', 'illegal-pair', 'not-finite', 'not-defined', 'syntax'] as const
+      ).map((why): Cause => ({ kind: 'cannot-evaluate', data: { why, name: '', reason: '' } })),
+      {
+        kind: 'cannot-evaluate',
+        data: {
+          why: 'not-finite',
+          name: '',
+          reason: '',
+          unevaluable: { member: sd, at: { where: 'nowhere', reason: '' } },
+        },
+      },
+      { kind: 'no-solution', data: { ...sd, ...read, shown: 'monotonic' } },
+      { kind: 'no-crossing', data: { ...sd, ...read, notProof: 'not-monotonic', endsRead: false } },
+      { kind: 'none-in-range', data: { ...sd, ...read, endsRead: false } },
+      {
+        kind: 'did-not-settle',
+        data: {
+          members: [],
+          simplifications: [],
+          why: { kind: 'sweeps', sweeps: 0, moved: { name: '', by: 0 }, moves: [] },
+        },
+      },
+      {
+        kind: 'did-not-settle',
+        data: {
+          members: [],
+          simplifications: [],
+          why: { kind: 'verification', tolRel: 0, off: [] },
+        },
+      },
+      { kind: 'limit', data: { members: [], limit: 'evaluations', count: 0 } },
+      { kind: 'limit', data: { members: [], limit: 'probes', count: 0 } },
+      { kind: 'statement-false', data: { path: [], param: '', statement: '' } },
+      {
+        kind: 'fails',
+        data: { text: odd('>>'), lhs: 1, rhs: 0, margin: 0, marginPct: 0, hard: true },
+      },
+      {
+        kind: 'fails',
+        data: {
+          text: odd('>>'),
+          lhs: 1,
+          rhs: 2,
+          margin: 0,
+          marginPct: 0,
+          hard: true,
+          region: 'saturation',
+        },
+      },
+    ];
+    const kinds: Item['kind'][] = ['sheet', 'value', 'device', 'search', 'requirement'];
+    for (const cause of causes)
+      for (const kind of kinds) {
+        const item: Item = {
+          kind,
+          path: [],
+          name: kind === 'requirement' ? 'region' : '',
+          status: 'failed',
+          cause,
+        };
+        let lines: readonly string[] = [];
+        expect(() => (lines = describe(item).lines), `${cause.kind} on ${kind}`).not.toThrow();
+        expect(lines.length, `${cause.kind} on ${kind}`).toBeGreaterThan(0);
+      }
+    for (const kind of kinds)
+      expect(describe({ kind, path: [], name: '', status: 'withheld', on: [] }).lines.length).toBe(
+        1,
+      );
+  });
+});
+
+group('the parser’s reason for a syntax error, where a plain sentence says it', () => {
+  it('adds the reason line from the table, and none where the table has no entry', () => {
+    const at = (expression: string): string[] => {
+      const found = syntaxAt(expression)!;
+      return describe({
+        kind: 'value',
+        path: [],
+        name: 'y',
+        status: 'failed',
+        cause: {
+          kind: 'cannot-evaluate',
+          data: { why: 'syntax', name: 'y', reason: '', syntax: { expression, ...found } },
+        },
+      }).lines.slice(2);
+    };
+    expect(at('a + (b')).toEqual(['A bracket is not closed.']);
+    expect(at('f(a')).toEqual(['A bracket is not closed.']);
+    expect(at('(a))')).toEqual(['A closing bracket has no bracket that it closes.']);
+    expect(at('a +* b')).toEqual(['An operator has nothing after it.']);
+    expect(at('1a + b')).toEqual(['A name starts with a digit.']);
+    expect(at('a ? b')).toEqual([]);
+  });
+});
+
+group('the texts the audit of the item data asked for', () => {
+  it('gives one verdict reason for every value the run held', () => {
+    const v = verdictOf([
+      {
+        kind: 'search',
+        path: [],
+        name: 'a',
+        status: 'ok',
+        attributes: {
+          kind: 'held',
+          value: 1,
+          relation: { lhs: 'a', rhs: 'b', field: 'designConstraint' },
+        },
+      },
+      {
+        kind: 'search',
+        path: [],
+        name: 'c',
+        status: 'ok',
+        attributes: {
+          kind: 'held',
+          value: 1,
+          relation: { lhs: 'c', rhs: 'b', field: 'designConstraint' },
+        },
+      },
+    ]);
+    expect(verdictText(v).map(lineText)).toEqual([
+      'The verdict is undetermined, because a and c are held and not solved.',
+    ]);
+  });
+
+  it('says what kind of entry is not well formed, and what a tolerance must be', () => {
+    const entry = (e: NonNullable<NotReadData['entry']>, where: string): readonly string[] =>
+      describe(
+        failed('sheet', '', {
+          kind: 'not-read',
+          data: { why: 'field', where, message: '', entry: e },
+        }),
+      ).lines;
+    expect(entry('param', 'I_tail')).toEqual(['The entry of I_tail is not well formed.']);
+    expect(entry('selector', 'ld_sign')).toEqual([
+      'The axis-sign selector ld_sign is not well formed.',
+    ]);
+    expect(entry('check', 'gain')).toEqual(['The entry of check gain is not well formed.']);
+    expect(entry('tolerance', 'eq')).toEqual([
+      'The tolerance of check eq is not a number of zero or more.',
+    ]);
+    expect(entry('device', 'givens')).toEqual(['The device of this sheet is not well formed.']);
+    expect(entry('block', 'bias')).toEqual(['The entry of block bias is not well formed.']);
+    expect(entry('expression', 'CM_in')).toEqual(['The expression of CM_in is not well formed.']);
+    expect(entry('range-end', 'cm-lo')).toEqual(['Range end cm-lo is not well formed.']);
+  });
+
+  it('gives a stepped end the digits that tell it from the end of the range', () => {
+    const d: NoCrossingData = {
+      ...search({
+        unit: 'V',
+        stage: 'physical',
+        range: {
+          ...authorRange('x', 0, 0.9),
+          wiring: { range: [0, 0.9], below: 'gnd', above: 'vdd' },
+        },
+        searched: [0, 0.9],
+      }),
+      ends: [
+        { x: 0, lhs: 1, rhs: 2 },
+        { x: 0.898, lhs: 1.5, rhs: 2, stepped: 'gives no number' },
+      ],
+      ended: { kind: 'sign' },
+      notProof: 'end-not-read',
+      endsRead: false,
+    };
+    const lines = describe(failed('search', 'x', { kind: 'no-crossing', data: d })).lines;
+    expect(lines).toContain('The engine searched it from 0 V to 0.898 V.');
+    expect(lines.some((l) => l.startsWith('Above 0.898 V,'))).toBe(true);
+  });
+
+  it('names an operator that no entry lists, and does not stop', () => {
+    const c = failsCause({
+      kind: 'spec',
+      text: { lhs: 'x', op: '>>' as never, rhs: 'y' },
+      lhsValue: 1,
+      rhsValue: 2,
+      margin: -1,
+      marginPct: -0.5,
+    });
+    expect(textOf(c).lines[1]).toBe('x is 1, and the check requires a value related by >> to 2.');
   });
 });
