@@ -131,7 +131,10 @@ test('device swap preserves the user’s tabs (an authored sheet is not wiped)',
   await expect(page.locator('.grid .panel')).toHaveCount(6);
   const sp = page.locator('.grid .panel').last();
   await expect(sp.locator('.sheet')).toBeVisible();
-  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute(
+    'data-verdict',
+    /^(feasible|non-compliant)$/,
+  );
   await expect(sp.locator('.bind')).toContainText('W=');
 });
 
@@ -230,7 +233,7 @@ test('design sheet: a composed cascode shows its block and composes feasibility,
   // The embedded common-source child renders in the children summary and is feasible,
   // and the scalars it exposes (cs__av0 → typeset A_{v0,cs}, …) are shown.
   await expect(sp.locator('.suse')).toHaveCount(1);
-  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
+  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveAttribute('data-verdict', 'feasible');
   await expect(sp.locator('.suse .prov')).toContainText('Av0,cs');
   // The parent's composed gain check evaluates over the child's provided scalars.
   await expect(sp.locator('.srules tr', { hasText: 'gain-spec' })).toBeVisible();
@@ -281,14 +284,17 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   // The child inherits the active (demo) device; point it at the imported device → a different
   // table re-sizes the block. That device carries half the current per unit width, so the same
   // 20 µA needs twice the width: the block still sizes, and its card shows different numbers.
-  await expect(child).toHaveClass(/st-pass/);
+  await expect(child).toHaveAttribute('data-verdict', 'feasible');
   const before = (await child.locator('.susebind').textContent())?.trim();
   await child.locator('.dsel').selectOption({ index: 2 }); // the imported nmos_half
   await expect
     .poll(async () => (await child.locator('.susebind').textContent())?.trim())
     .not.toBe(before);
-  await expect(child).toHaveClass(/st-pass/);
-  await expect(sp.locator('.feasb')).toHaveText(/^(in)?feasible/); // a verdict, on both devices
+  await expect(child).toHaveAttribute('data-verdict', 'feasible');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute(
+    'data-verdict',
+    /^(feasible|non-compliant)$/,
+  ); // a verdict, on both devices
 
   // Both the choice AND the device survive a reload (tables restore from local storage),
   // so the child keeps sizing against the picked table.
@@ -297,7 +303,7 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   const sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toHaveValue(/nmos_half/);
   await expect(sp2.locator('.pwarn', { hasText: 'nmos_half' })).toHaveCount(0);
-  await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
+  await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveAttribute('data-verdict', 'feasible');
 
   // Removing the chosen device leaves the choice set-but-absent: the run is refused before the
   // engine sees it and says which device is missing — not a design that fails, and never a
@@ -305,8 +311,11 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   // that is what the refusal is fixed with.
   await page.locator('.devices .dev', { hasText: 'nmos_half' }).locator('.drm').click();
   await expect(sp2.locator('[data-not-evaluated]')).toContainText('nmos_half');
-  await expect(sp2.locator('.feasb')).toHaveText('not evaluated');
-  await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-skip/);
+  await expect(sp2.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'not-calculated');
+  await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveAttribute(
+    'data-verdict',
+    'not-calculated',
+  );
   await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toContainText(
     'not loaded',
   );
@@ -352,7 +361,10 @@ test('design sheet: two loaded devices sharing a label are each individually sel
   // why, which it could only do having been asked on that table and not on the demo it inherits.
   const second = await opts.filter({ hasText: 'otherfab' }).getAttribute('value');
   await dsel.selectOption(second!);
-  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-fail/);
+  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveAttribute(
+    'data-verdict',
+    'undetermined',
+  );
   await expect(sp.locator('.suse', { hasText: 'cs' }).locator('.perr')).toContainText(
     'no vds sweep',
   );
@@ -380,7 +392,10 @@ test('design sheet: a table that lacks a sweep the sheet uses refuses the device
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
   await pickSheet(sp, 'Single NMOS gm/ID sizing');
-  await expect(sp.locator('.feasb')).toHaveText(/^(in)?feasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute(
+    'data-verdict',
+    /^(feasible|non-compliant)$/,
+  );
   await expect(sp.locator('.shead .bind')).toContainText('W=');
   await expect(sp.locator('[data-not-evaluated]')).toHaveCount(0);
 
@@ -388,13 +403,12 @@ test('design sheet: a table that lacks a sweep the sheet uses refuses the device
   // This table cannot answer for that bias, so the device is not sized: no verdict and no
   // sized line — the reason instead, naming the given and the sweep the table lacks.
   await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
-  await expect(sp.locator('.feasb')).toHaveText('no answer');
-  await expect(sp.locator('[data-not-evaluated]')).toContainText('given vsb = 0.3');
-  await expect(sp.locator('[data-not-evaluated]')).toContainText('no vsb sweep');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
+  await expect(sp.locator('[data-verdict-reason]')).toContainText('cannot be sized');
   await expect(sp.locator('.shead .bind')).toHaveCount(0);
   await expect(sp.locator('.shead .perr')).toContainText('no vsb sweep');
   // The block under it has its source at its body, and still sizes.
-  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
+  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveAttribute('data-verdict', 'feasible');
 
   // A device whose givens leave the body bias out is sized at the default the table was taken
   // at, and the bias is marked as assumed, as it is on a table that sweeps it.
@@ -431,7 +445,7 @@ test('design sheet: a failing advisory check reads as advisory, distinct from a 
   const gmId = sp.locator('.svar[data-param="gm_id"]').locator('.num');
   await gmId.fill('8');
   await gmId.blur();
-  await expect(sp.locator('.feasb')).toHaveClass(/ok/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'feasible');
   await expect(gbw).toHaveClass(/st-fail/);
   await expect(gbw).toHaveClass(/advisory/);
 });
@@ -511,7 +525,7 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await expect(input.locator('.susebind')).toContainText('W=');
   await expect(input.locator('.sbias')).toContainText('vds');
   await expect(sp.locator('.suse', { hasText: 'load' })).toBeVisible();
-  await expect(sp.locator('.feasb')).toHaveText('feasible');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'feasible');
 
   // The targets it opens with are an example specification, labelled as one: a plausible number
   // for the class, to be replaced by the design's own.
@@ -555,10 +569,10 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   // topology, typeset (the 5T's blocks all carry $V_{GS}$-style math in that prose).
   await expect(sp.locator('.suse .sudesc').first()).toBeVisible();
   await expect(sp.locator('.suse .sudesc sub').first()).not.toHaveCount(0);
-  // An infeasible verdict names the binding check rather than stopping at "infeasible".
-  const badge = sp.locator('.shead .feasb');
-  if ((await badge.getAttribute('class'))?.includes('no'))
-    await expect(badge.locator('i')).not.toHaveCount(0);
+  // A non-compliant verdict names the failed requirement under the badge.
+  const badge = sp.locator('.shead [data-feasibility]');
+  if ((await badge.getAttribute('data-verdict')) === 'non-compliant')
+    await expect(sp.locator('[data-verdict-reason]')).toContainText('fails');
 
   expect(errors).toEqual([]);
 });
@@ -683,7 +697,7 @@ test('design sheet: a nested block inherits its parent block’s device, and is 
   const cs = sp.locator('.suse .suse');
   const width = async () => (await cs.locator('.susebind').textContent())?.trim();
   await expect(cs).toHaveCount(1);
-  await expect(cs).toHaveClass(/st-pass/);
+  await expect(cs).toHaveAttribute('data-verdict', 'feasible');
   const onDemo = await width();
 
   // Inside the reference the leaf belongs to the library sheet: no menu of its own. It names no
@@ -703,7 +717,7 @@ test('design sheet: a nested block inherits its parent block’s device, and is 
   await expect(csMenu.locator('option').first()).toHaveText('↳ parent block’s device');
   await csMenu.selectOption({ label: 'nmos_half' });
   await expect.poll(width).toBe(onHalf);
-  await expect(cs).toHaveClass(/st-pass/);
+  await expect(cs).toHaveAttribute('data-verdict', 'feasible');
   await expect(stMenu).toHaveValue(''); // only the leaf moved
 
   // The binding is written into the sheet, so it survives a reload.
@@ -1128,12 +1142,15 @@ test('design sheet: a DC-level class survives import and reload, and the assumpt
   await page.locator('button.btn', { hasText: '+ sheet' }).click();
   await pickSheet(page, 'Classed level assumed');
   const sheet = page.locator('.sheet').first();
-  await expect(sheet.locator('.feasb')).toHaveText('feasible');
+  // A design sized under an assumed level is not determined by the sheet: the verdict is
+  // undetermined, and the reason names the level.
+  await expect(sheet.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
+  await expect(sheet.locator('[data-verdict-reason]')).toContainText('V_d');
   await expect(sheet.locator('.sassume')).toHaveText('sized under 1 assumption: V_d');
 
   await page.reload();
   const after = page.locator('.sheet').first();
-  await expect(after.locator('.feasb')).toHaveText('feasible');
+  await expect(after.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
   await expect(after.locator('.sassume')).toHaveText('sized under 1 assumption: V_d');
 
   // "solved" is derived from designConstraint/solveFor, never written — an import carrying it is
@@ -1169,7 +1186,10 @@ test('design sheet: a stored sheet from before DC-input classes is kept, and say
   await page.locator('button.btn', { hasText: '+ sheet' }).click();
   await pickSheet(page, 'Stored before classes');
   const sheet = page.locator('.sheet').first();
-  await expect(sheet.locator('.feasb')).toHaveText('not evaluated');
+  await expect(sheet.locator('[data-feasibility]')).toHaveAttribute(
+    'data-verdict',
+    'not-calculated',
+  );
   await expect(sheet.locator('.sissue', { hasText: '"V_d"' }).first()).toContainText(
     'carries no class',
   );
@@ -1207,7 +1227,10 @@ test('design sheet: a stored sheet that fails validation is kept, opens with its
   await pickSheet(page, 'Stored with a duplicate check id');
   const sheet = page.locator('.sheet').first();
   await expect(sheet.locator('.svar[data-param="V_d"]')).toBeVisible();
-  await expect(sheet.locator('.feasb')).toHaveText('not evaluated');
+  await expect(sheet.locator('[data-feasibility]')).toHaveAttribute(
+    'data-verdict',
+    'not-calculated',
+  );
   await expect(sheet.locator('.sissue').first()).toContainText('duplicate check id "ib-range"');
 
   await entry.locator('.drm').click();
@@ -1327,7 +1350,7 @@ test('design sheet: imported sheets join the library — pickable, referenceable
   await expect(sp.locator('.suse .refb')).toContainText('my-block');
   await expect(sp.locator('.suse .prov')).toContainText('6');
   await expect(sp.locator('.srow', { hasText: 'z' })).toContainText('7');
-  await expect(sp.locator('.feasb')).toHaveText('feasible');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'feasible');
 
   // Imported sheets persist across a reload (the runtime stand-in for the sheets/ folder).
   await page.reload();
@@ -1335,13 +1358,13 @@ test('design sheet: imported sheets join the library — pickable, referenceable
   await expect(page.locator('.usheets .dev', { hasText: 'my-top' })).toBeVisible();
   const sp3 = page.locator('.grid .panel').last();
   await expect(sp3.locator('.suse .refb')).toContainText('my-block');
-  await expect(sp3.locator('.feasb')).toHaveText('feasible');
+  await expect(sp3.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'feasible');
 
   // Removing the referenced sheet fails closed: the document no longer assembles, so it is not
   // evaluated at all — an error naming the missing ref, never a silent fallback and never a
   // verdict about a design that could not be built.
   await page.locator('.usheets .dev', { hasText: 'my-block' }).locator('.drm').click();
-  await expect(sp3.locator('.feasb')).toHaveText('not evaluated');
+  await expect(sp3.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'not-calculated');
   await expect(sp3.locator('.pwarn', { hasText: 'my-block' }).first()).toBeVisible();
 
   expect(errors).toEqual([]);
@@ -1410,14 +1433,14 @@ test('operating range: chips report each range end; an end the solve cannot reac
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 3 points · 2 fail · 1 no answer',
   );
-  await expect(sp.locator('.feasb')).toContainText('infeasible');
-  await expect(sp.locator('.feasb i')).toContainText('offset-spec');
-  await expect(chips.nth(0)).toHaveClass(/\bno\b/);
-  await expect(chips.nth(1)).toHaveClass(/skip/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant');
+  await expect(sp.locator('[data-verdict-reason]')).toContainText('offset-spec');
+  await expect(chips.nth(0)).toHaveAttribute('data-verdict', 'non-compliant');
+  await expect(chips.nth(1)).toHaveAttribute('data-verdict', 'undetermined');
   await sp.locator('.swsel select').selectOption('CM_dc');
   // The sweep runs in the background and the chart lands when it is done.
   await expect(sp.locator('.pchart canvas')).toBeVisible({ timeout: 60_000 });
-  await expect(sp.locator('.skey')).toContainText('complies at CM_dc = ', { timeout: 60_000 });
+  await expect(sp.locator('.skey')).toContainText('margin at CM_dc = ', { timeout: 60_000 });
   await expect(sp.locator('.skey')).toContainText('the low end of the claimed CM_dc range');
   await expect(sp.locator('[data-sweep-caption]')).toContainText(
     'each sample holds its OWN design',
@@ -1432,10 +1455,9 @@ test('operating range: chips report each range end; an end the solve cannot reac
   const lo = sp.locator('.svar[data-param="CM_lo"] .num');
   await lo.fill('0.3');
   await lo.blur();
-  await expect(chips.nth(0)).toHaveClass(/skip/);
-  await expect(chips.nth(0)).not.toHaveClass(/\bno\b/);
-  await expect(chips.nth(0)).toContainText('?');
-  await expect(chips.nth(0)).toContainText(/no answer — .*does not change sign/);
+  await expect(chips.nth(0)).toHaveAttribute('data-verdict', 'undetermined');
+  await expect(chips.nth(0)).toContainText('? undetermined');
+  await expect(chips.nth(0)).toContainText('because');
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 3 points · 1 fail · 2 no answer',
   );
@@ -1458,7 +1480,7 @@ test('design sheet: evaluation runs off the page — it stays responsive, says s
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
   await pickSheet(sp, '5T OTA');
-  await expect(sp.locator('.feasb')).toContainText('infeasible');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant');
   await expect(sp.locator('[data-busy]')).toHaveCount(0);
 
   await sp.locator('.swsel select').selectOption('CM_dc');
@@ -1528,12 +1550,12 @@ test('design sheet: picking another sheet of the same title does not show the fi
   expect(twins).toHaveLength(2);
 
   await sel.selectOption(twins[0]);
-  await expect(sp.locator('.feasb')).toHaveText('feasible');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'feasible');
   await sel.selectOption(twins[1]);
   // The light sheet's verdict is gone at once, though the title is the same.
-  await expect(sp.locator('.feasb')).toHaveText('evaluating…');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'none');
   await expect(sp.locator('[data-busy]')).toHaveCount(0, { timeout: 60_000 });
-  await expect(sp.locator('.feasb')).not.toHaveText('evaluating…');
+  await expect(sp.locator('[data-feasibility]')).not.toHaveAttribute('data-verdict', 'none');
 
   expect(errors).toEqual([]);
 });
@@ -1553,7 +1575,10 @@ test('design sheet: where no worker can be started, the sheet is evaluated on th
   await loadDemo(page);
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
-  await expect(sp.locator('.feasb')).toHaveText(/^(in)?feasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute(
+    'data-verdict',
+    /^(feasible|non-compliant)$/,
+  );
   await expect(sp.locator('.bind')).toContainText('W=');
   await expect(sp.locator('[data-busy]')).toHaveCount(0);
 
@@ -1586,37 +1611,36 @@ test('operating range: a range end that was not run reads as a question nobody a
   // At the default centre the low end IS run and reads red, so the strip starting from a state
   // this test would fail on is what makes the transition below mean something. It is still run
   // once the pair has moved, which is the state the centre is pushed out of.
-  await expect(chips.nth(0)).toHaveClass(/no/);
+  await expect(chips.nth(0)).toHaveAttribute('data-verdict', 'non-compliant');
   const gmId = sp.locator('.svar[data-param="gm_id_in"] .num');
   await gmId.fill('18');
   await gmId.blur();
-  await expect(chips.nth(0)).not.toHaveClass(/skip/);
+  await expect(chips.nth(0)).not.toHaveAttribute('data-verdict', 'not-calculated');
 
   const cm = sp.locator('.svar[data-param="CM_dc"] .num');
   await cm.fill('1.6');
   await cm.blur();
 
   for (const i of [0, 1]) {
-    await expect(chips.nth(i)).toHaveClass(/skip/);
-    await expect(chips.nth(i)).not.toHaveClass(/\bno\b/);
-    await expect(chips.nth(i)).toContainText('not run');
-    await expect(chips.nth(i)).not.toContainText('infeasible');
+    await expect(chips.nth(i)).toHaveAttribute('data-verdict', 'not-calculated');
+    await expect(chips.nth(i)).toContainText('— not calculated');
+    await expect(chips.nth(i)).not.toContainText('non-compliant');
     await expect(chips.nth(i)).not.toContainText('✗');
   }
   // The centre's own solve did not land: feasibility has no answer, and the badge names no
   // check — a margin read where the solve stopped is not a cause. The count keeps the centre
   // (asked, unanswered) apart from the two ends (never asked).
-  await expect(sp.locator('.feasb')).toHaveText('no answer');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 3 points · 1 no answer · 2 not run',
   );
-  await expect(sp.locator('[data-not-evaluated] b').first()).toHaveText('no answer at tt');
+  await expect(sp.locator('[data-not-evaluated]')).toContainText('before it stopped');
 
   // Recentre: the same two ends go back to being answerable, so the neutral state is a
   // property of the point and not a latch.
   await cm.fill('1.1');
   await cm.blur();
-  await expect(chips.nth(0)).not.toHaveClass(/skip/);
+  await expect(chips.nth(0)).not.toHaveAttribute('data-verdict', 'not-calculated');
 });
 
 test('design sheet: the sensitivity readout ranks the knobs that move the binding check', async ({
@@ -1715,7 +1739,7 @@ test('design sheet: an imported netlist survives import and reload (still checke
   const warn = page.locator('.sheet .pwarn', { hasText: 'wiring' });
   await expect(warn).toContainText('does not close');
   // The wiring check's verdict sits beside the feasibility badge: one finding, the loop.
-  await expect(page.locator('.sheet [data-wiring]')).toHaveText('wiring: 1 finding');
+  await expect(page.locator('.sheet [data-wiring]')).toHaveText('1 wiring finding');
   // The finding IS the two claims and the residual of the loop, so the line has to survive to its
   // last word — captured at panel scope, where a clipped one would show.
   await warn.scrollIntoViewIfNeeded();
@@ -1819,7 +1843,7 @@ test('design sheet: a format this app does not read is refused at import, and a 
   const shown = sp.locator('[data-refused]');
   await expect(shown).toContainText(sentence);
   await expect(shown).toContainText('a stored copy is kept as it was stored');
-  await expect(sp.locator('.feasb')).toHaveCount(0);
+  await expect(sp.locator('[data-feasibility]')).toHaveCount(0);
   await expect(sp.locator('.sheet strong')).toHaveCount(0);
 
   expect(errors).toEqual([]);
@@ -1855,7 +1879,7 @@ test('design sheet: a stored panel restored without a check gives no verdict unt
   await expect(sp.locator('.shead strong')).toHaveText('Single NMOS gm/ID sizing');
   // At its defaults the headroom check fails, so the design reads infeasible.
   await expect(sp.locator('.srules tr', { hasText: 'headroom' })).toHaveClass(/st-fail/);
-  await expect(sp.locator('.feasb')).toHaveText(/infeasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant');
   await expect(sp.locator('[data-refused]')).toHaveCount(0);
 
   // The stored copy as a later build might write it: the headroom check under a kind this build
@@ -1875,7 +1899,7 @@ test('design sheet: a stored panel restored without a check gives no verdict unt
   const refused = sp2.locator('[data-refused]');
   await expect(refused).toContainText('could not be read whole');
   await expect(refused).toContainText('checks[1]');
-  await expect(sp2.locator('.feasb')).toHaveCount(0);
+  await expect(sp2.locator('[data-feasibility]')).toHaveCount(0);
   await expect(sp2.locator('.srules')).toHaveCount(0);
   await expect(sp2.locator('.shead strong')).toHaveCount(0);
   await expect.poll(storedChecks).toContain('headroom:contract');
@@ -1886,7 +1910,7 @@ test('design sheet: a stored panel restored without a check gives no verdict unt
   await loadDemo(page);
   const sp3 = page.locator('.grid .panel').last();
   await expect(sp3.locator('[data-refused]')).toContainText('checks[1]');
-  await expect(sp3.locator('.feasb')).toHaveCount(0);
+  await expect(sp3.locator('[data-feasibility]')).toHaveCount(0);
   await expect.poll(storedChecks).toContain('headroom:contract');
 
   // Evaluating without the check is the user's choice, and it makes the restored sheet their
@@ -1895,7 +1919,7 @@ test('design sheet: a stored panel restored without a check gives no verdict unt
   await sp3.locator('[data-restore-accept]').click();
   await expect(sp3.locator('[data-refused]')).toHaveCount(0);
   await expect(sp3.locator('.shead strong')).toHaveText('Single NMOS gm/ID sizing');
-  await expect(sp3.locator('.feasb')).toBeVisible();
+  await expect(sp3.locator('[data-feasibility]')).toBeVisible();
   await expect(sp3.locator('.srules tr', { hasText: 'headroom' })).toHaveCount(0);
   await expect.poll(storedChecks).not.toContain('headroom:contract');
 
@@ -1937,7 +1961,7 @@ test('design sheet: a stored panel restored without prose only is evaluated, say
   const sp = page.locator('.grid .panel').last();
   await expect(sp.locator('[data-refused]')).toHaveCount(0);
   await expect(sp.locator('[data-restore-lost]')).toContainText('checks[0].note');
-  await expect(sp.locator('.feasb')).toBeVisible();
+  await expect(sp.locator('[data-feasibility]')).toBeVisible();
   // The restored numbers are not offered for copying while the stored copy is kept.
   await expect(sp.locator('.sexp button', { hasText: 'copy results' })).toBeDisabled();
   await expect.poll(storedNote).toBe(42);
@@ -2022,7 +2046,7 @@ test('design sheet: a stored panel whose sheet cannot be read at all opens refus
   const sp = page.locator('.grid .panel').last();
   // Refused with the reason, evaluating nothing — never another sheet in its place.
   await expect(sp.locator('[data-refused]')).toContainText('could not be restored');
-  await expect(sp.locator('.feasb')).toHaveCount(0);
+  await expect(sp.locator('[data-feasibility]')).toHaveCount(0);
   await expect(sp.locator('.shead strong')).toHaveCount(0);
   await expect.poll(storedSheet).toBe('not a sheet');
 
@@ -2128,10 +2152,11 @@ test('design sheet: a solved param whose search fails shows no number, nor does 
   await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
   await expect(sheet.locator('.srules tr.st-na')).toHaveCount(1);
   // The solved field shows no number, and neither do the equations that read it: they read
-  // "withheld", which the result decides (SheetResult.withheld).
+  // "not calculated", with the item's own text as the title.
   await expect(sheet.locator('[data-param="x"] input.num')).toHaveValue('—');
   const rows = sheet.locator('.srows .srow .sval');
-  await expect(rows).toHaveText(['withheld', 'withheld', /^\d/]);
+  await expect(rows).toHaveText(['— not calculated', '— not calculated', /^\d/]);
+  await expect(rows.first()).toHaveAttribute('title', /^y is not calculated, because /);
 
   expect(errors).toEqual([]);
 });
@@ -2153,6 +2178,16 @@ test('design sheet: a run whose own search failed is still swept and mapped, eac
   // Beyond a goal of 3 the search finds no root: those cells have no answer, so they read
   // undetermined, never as a failed requirement; below it every requirement holds.
   await expect(map).toHaveAttribute('data-map-verdicts', /^feasible:\d+ undetermined:\d+$/);
+  // The caption and the legend say the same as the cells: no cell fails a requirement.
+  await expect(sp.locator('[data-map-caption]')).toHaveText(
+    'No hard requirement fails on this plane.',
+  );
+  await expect(sp.locator('[data-map-legend] [data-legend]')).toHaveText([
+    /feasible$/,
+    /non-compliant$/,
+    /undetermined$/,
+    /infeasible$/,
+  ]);
 });
 
 test('design sheet: a sweep across the end of the table says where the table ends, on the line and on the map', async ({
@@ -2201,24 +2236,24 @@ test('design sheet: a sweep across the end of the table says where the table end
     .locator('option', { hasText: 'Edge' })
     .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
   await sel.selectOption(edge[0]);
-  await expect(sp.locator('.feasb')).toHaveText('feasible');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'feasible');
 
   // The stretch that passes up to the table's end ends there — not where a requirement fails —
   // and the line under the chart says so.
   await sp.locator('.swsel select').selectOption('VD');
   await expect(sp.locator('.pchart canvas')).toBeVisible();
-  await expect(sp.locator('[data-sweep-window]')).toContainText('ends where the table ends');
+  await expect(sp.locator('[data-sweep-window]')).toContainText('the table ends');
 
   // On the map, the cells past the table's end have no answer, and say why under the pointer.
   await sp.locator('.swsel2 select').selectOption('gm_id');
   const canvas = sp.locator('.smapc');
   await expect(canvas).toBeVisible();
-  await expect(sp.locator('.scap')).toContainText('grey has no answer');
+  await expect(sp.locator('[data-map-legend]')).toContainText('undetermined');
   const box = (await canvas.boundingBox())!;
   await canvas.hover({ position: { x: box.width - 3, y: box.height / 2 } });
-  await expect(canvas).toHaveAttribute('title', /^no answer: beyond the table: vds = /);
+  await expect(canvas).toHaveAttribute('title', /^undetermined\n[^\n]+\nvds = /);
   await canvas.hover({ position: { x: 3, y: box.height / 2 } });
-  await expect(canvas).toHaveAttribute('title', '');
+  await expect(canvas).toHaveAttribute('title', /^feasible\n/);
 
   expect(errors).toEqual([]);
 });
@@ -2242,14 +2277,14 @@ test('design sheet: a drain voltage beyond the table is not sized, and says what
   const vds = sp.locator('.svar[data-param="V_ds"]').locator('.num');
   await vds.fill('1.5');
   await vds.blur();
-  await expect(sp.locator('.feasb')).toHaveText('no answer');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
   await expect(sp.locator('.shead .bind')).toHaveCount(0);
   const beyond = sp.locator('.shead .perr.beyond');
   await expect(beyond).toHaveCount(1);
   await expect(beyond).toContainText('beyond the table');
   await expect(beyond).toContainText('1.2');
   // What reads the device is shown as withheld, not as a number from another bias.
-  await expect(sp.locator('.sval.withheld').first()).toBeVisible();
+  await expect(sp.locator('.sval.v-none').first()).toBeVisible();
 
   // Back on the table, the device sizes again.
   await vds.fill('0.6');
@@ -2357,7 +2392,7 @@ test('design sheet: a sweep plots a named result of the sheet, as a curve and ac
   // Back to margins: the feasibility map returns.
   await sp.locator('[data-plot]').selectOption('');
   await expect(sp.locator('[data-map-value]')).toHaveCount(0);
-  await expect(sp.locator('.scap').first()).toContainText('feasibility');
+  await expect(sp.locator('[data-map-legend]')).toBeVisible();
 
   // A value the engine solves for is a named result too: the 5T OTA's tail voltage is a curve.
   await sp.locator('.swsel2 select').selectOption('');

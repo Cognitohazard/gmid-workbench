@@ -545,12 +545,11 @@
   ): readonly Line[] => {
     if (!v) return [];
     const lines: Line[] = [...verdictText(v)];
-    if (v.verdict !== 'undetermined')
-      for (const f of v.failed) {
-        const list = f.end === undefined ? items : ends.find((e) => e.name === f.end)?.items;
-        const item = itemAt(list, f);
-        if (item) lines.push(...describeItem(item, [], { end: f.end }).segments);
-      }
+    for (const f of v.failed) {
+      const list = f.end === undefined ? items : ends.find((e) => e.name === f.end)?.items;
+      const item = itemAt(list, f);
+      if (item) lines.push(...describeItem(item, [], { end: f.end }).segments);
+    }
     return distinct(lines);
   };
   const reasonLines = $derived(reasonOf(shownVerdict, result?.items, result?.rangeEnds));
@@ -754,8 +753,10 @@
   /** The centre: the sized run answers feasibility in its own words, a held one compliance. */
   const centreCell = (r: ConditionRun): string => {
     const at = r.points[0].state;
-    if (r.state === 'evaluated' && r.design === 'sized' && at !== 'no-answer')
-      return r.feasible ? '✓ feasible' : '✗ infeasible';
+    // The run's own verdict, in the core's words: the design's where it was sized there.
+    const v = r.design === 'sized' ? r.result?.verdict?.verdict : undefined;
+    if (r.state === 'evaluated' && v && at !== 'no-answer')
+      return `${LOOK[v].glyph} ${VERDICT_WORDS[v]}`;
     return `${POINT_MARK[at]} ${POINT_TEXT[at]}`;
   };
   /** The range ends, as a count with the worst outcome's mark — the chips below carry each one. */
@@ -1646,11 +1647,10 @@
     }
     if (c.verdict.verdict === 'feasible') return [];
     const lines: Line[] = [...verdictText(c.verdict)];
-    if (c.verdict.verdict !== 'undetermined')
-      for (const f of c.verdict.failed) {
-        const item = itemAt(c.items, f);
-        if (item) lines.push(...describeItem(item, within).segments);
-      }
+    for (const f of c.verdict.failed) {
+      const item = itemAt(c.items, f);
+      if (item) lines.push(...describeItem(item, within).segments);
+    }
     return distinct(lines);
   };
 
@@ -2090,6 +2090,9 @@
           beyond the table: {beyondText(r)} — not sized
         </div>
       {/each}
+    {:else if c?.sizing?.error}
+      <!-- As on the sheet: the reason the device cannot be sized, until its item says it. -->
+      <div class="perr" title={c.sizing.error}>{c.sizing.error}</div>
     {/if}
     {#if why.length}
       <div class="sblock" data-block-reason>
@@ -2176,7 +2179,9 @@
         {@const v = shownVerdict?.verdict}
         {@const look = lookOf(v)}
         {#if holding && single}
-          <span class="sheldat">the nominal design held at {condLabel(single)}</span>
+          <span class="sheldat" data-badge-stamp
+            >the nominal design held at {condLabel(single)}</span
+          >
         {/if}
         <span
           class="vbadge {look.cls}"
@@ -2190,7 +2195,7 @@
           >{look.glyph} {VERDICT_WORDS[v ?? 'not-calculated']}</span
         >
         {#if !holding && agg.base && nominalKey && !sameCondition(agg.base, nominalKey)}
-          <span class="sheldat">sized at {condLabel(agg.base)}</span>
+          <span class="sheldat" data-badge-stamp>sized at {condLabel(agg.base)}</span>
         {/if}
       {/if}
       {#if hasCompliance}
@@ -2283,6 +2288,10 @@
               >beyond the table: {beyondText(r)} — not sized</span
             >
           {/each}
+        {:else if result.sizing.error}
+          <!-- The device's item does not yet say why it cannot be sized (a sweep the table
+               lacks), so the sizing report's own words stay until it does. -->
+          <span class="perr" title={result.sizing.error}>{result.sizing.error}</span>
         {/if}
         {@render biasCtl(cfg.givens, result.sizing, [])}
       {/if}
@@ -2482,7 +2491,7 @@
     {/if}
     <!-- The values the run held instead of solving. A held value is not a fault. -->
     {#if heldLines.length}
-      <div class="sheld" data-held>
+      <div class="sheld" data-held-values>
         <span class="glabel">held</span>
         {#each heldLines as l, k (k)}<p>{@render line(l)}</p>{/each}
       </div>
@@ -2823,7 +2832,7 @@
           {:else}
             sized there: each sample re-sizes the design at {at} with {active} at that value{#if (cfg.operatingRange ?? []).length}
               · each sample holds its OWN design at the range ends, so the range-end curves move
-              with the sweep and never change what is feasible{/if}.
+              with the sweep and never change the sheet's verdict{/if}.
           {/if}
           The 0 line is where a check sits exactly on its limit; dashed = advisory; clipped at ±{MARGIN_CLIP}%.
         </div>

@@ -188,7 +188,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   matching: 'Pelgrom mismatch budget on the sized geometry: σ(V_th), pair offset, and σ(I)/I.',
   // topology picker (design-type search)
   picker:
-    'Which design-type to start from. Type the spec you have — supply, load, gain, bandwidth, slew, noise, offset, common-mode range — and every amplifier and buffer sheet in the library is searched against it on the active device: does it close, at what quiescent current, with which knob settings, and what binds it. A screening instrument, not an optimizer — it finds feasible starting points and names their costs; the design still happens in the sheet. It answers feasibility only: whether a design you pick then holds across its operating range, or at other process conditions, is checked on its own sheet, where that one design is held fixed. Each field is optional: an empty box means "not my requirement", and the sheet keeps its own default.',
+    'Which design-type to start from. Type the spec you have — supply, load, gain, bandwidth, slew, noise, offset, common-mode range — and every amplifier and buffer sheet in the library is searched against it on the active device: does it close, at what quiescent current, with which knob settings, and what binds it. A screening instrument, not an optimizer — it finds starting points that close and names their costs; the design still happens in the sheet. It answers whether a design closes, and nothing more. Whether a design you pick then holds across its operating range, or at other process conditions, is checked on its own sheet, where that one design is held fixed. Each field is optional: an empty box means "not my requirement", and the sheet keeps its own default.',
   pickerMargin:
     'The worst hard-check margin at the point reported — how much room the design has left where it is tightest, or how far it is from closing. A margin quoted on a sheet that did not close belongs to the last point the search reached, not to the design: it moves when the budget moves, so read the cause beside it before chasing the number.',
   pickerCaveats:
@@ -248,7 +248,7 @@ export const SOLVER_HELP: Readonly<
 export const VERDICT_TITLE = {
   infeasible:
     'The engine proved that no design exists. It gives this verdict only with a proof, and it has no such proof yet.',
-  'no-operating-point': 'The held hardware has no operating point at this condition.',
+  'no-operating-point': `The held hardware has ${VERDICT_WORDS['no-operating-point']} at this condition.`,
 } as const;
 
 /** What the panel says before the engine has given a verdict for the sheet. */
