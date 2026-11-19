@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import {
   libraryEntries,
   loadLibrary,
+  notACircuit,
   sheet,
   table,
   va,
@@ -20,10 +21,10 @@ import {
   VGS_GMID10_L05,
 } from '../sheet/library.fixtures';
 import { generateDemoDevice } from '../demo';
-import { isComplete } from '../sheet/states';
 import {
   runSheet,
   bindingCheck,
+  validateSheet,
   withParams,
   type SheetDoc,
   type SheetRefEntry,
@@ -616,7 +617,7 @@ describe('the search', () => {
   // check failed on a design with that device missing. So nothing is searched, and the failing
   // check is not offered as what binds.
   it('does not search a sheet whose device the table cannot answer for', () => {
-    const doc: SheetDoc = {
+    const doc: SheetDoc = notACircuit({
       title: 'source above the body',
       polarity: 'n',
       params: [
@@ -627,7 +628,7 @@ describe('the search', () => {
       givens: { L: 'L', id: 'I', gm_id: '12', vds: '0.6', vsb: 'V_s' },
       equations: [],
       checks: [{ id: 'budget', kind: 'spec', lhs: 'I', op: '<=', rhs: '10e-6' }],
-    };
+    });
     const noBody = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
     const c = pickTopology({}, { path: 'synthetic/refused', doc }, noBody, undefined, {});
     expect(c.verdict).toBe('could-not-be-searched');
@@ -914,10 +915,9 @@ describe('reading the results', () => {
 
 describe('a sheet whose only error is on one requirement’s own entry', () => {
   // The five-transistor OTA with a tolerance that is not a number on its gain check: validation
-  // raises an error on that requirement's entry and on nothing else. The picker does not refuse
-  // the sheet before it searches; every number of the run is there, so the run is complete, and
-  // it is scored by the margins of the requirements that were read. Its verdict is never
-  // feasible, so the picker never reads it closed where the same sheet without the error closes.
+  // raises an error on that requirement's entry and on nothing else. The picker refuses the sheet
+  // before any search, at every spec: the answer is that one entry cannot be read, never a search
+  // that could not close.
   const doc0 = sheet('otas/five-transistor-ota.json');
   const doc: SheetDoc = {
     ...doc0,
@@ -929,36 +929,31 @@ describe('a sheet whose only error is on one requirement’s own entry', () => {
     pickTopology(spec, { path: 'otas/five-transistor-ota', doc: doc0 }, table, undefined, {
       refs: REFS,
     });
+  const relaxed: PickerSpec = {
+    VDD: 1.8,
+    CL: 2e-12,
+    Av_target: 10,
+    GBW_target: 5e6,
+    SR_target: 2e6,
+    vn_target: 1e-7,
+    vos_target: 0.04,
+  };
 
-  it('is searched, scored by what was read, and never closed', () => {
-    const at = runSheet(doc, table, undefined, REFS);
-    expect(isComplete(at)).toBe(true);
-    expect(at.verdict?.verdict).not.toBe('feasible');
-    const gain = at.items?.find((i) => i.kind === 'requirement' && i.name === 'gain-spec');
-    expect(gain?.status).toBe('failed');
-
-    // At the relaxed spec the plain sheet closes; this one has nothing failing to descend on.
-    const relaxed: PickerSpec = {
-      VDD: 1.8,
-      CL: 2e-12,
-      Av_target: 10,
-      GBW_target: 5e6,
-      SR_target: 2e6,
-      vn_target: 1e-7,
-      vos_target: 0.04,
-    };
+  it('is refused before any search, with the finding as its cause, at every spec', () => {
+    // Without the error, the same sheet closes at both specs.
     expect(plain(relaxed).verdict).toBe('closed');
-    expect(bad(relaxed).verdict).toBe('could-not-be-searched');
-
-    // At the shipped spec the plain sheet is repaired and closes. This one fails its offset check
-    // at the start; every sample of the search is complete and scored by the margins read, so the
-    // search moves the knobs until no hard check fails, and the sheet still does not close.
     expect(plain({}).verdict).toBe('closed');
-    expect(bindingCheck(at)?.id).toBe('offset-spec');
-    const searched = bad({});
-    expect(searched.verdict).toBe('did-not-close');
-    expect(searched.evals).toBeGreaterThan(1);
-    expect(Object.keys(searched.knobs).length).toBeGreaterThan(0);
-    expect(searched.bindingCheck).toBeUndefined();
+    const finding = validateSheet(doc).find((w) => w.severity === 'error');
+    expect(finding?.location).toBe('gain-spec');
+    for (const spec of [relaxed, {}]) {
+      const c = bad(spec);
+      expect(c.verdict).toBe('could-not-be-searched');
+      expect(c.cause).toBe(finding?.message);
+      // One screening evaluation and no search.
+      expect(c.evals).toBe(1);
+      expect(c.knobs).toEqual({});
+      expect(c.bindingCheck).toBeUndefined();
+      expect(c.worstMargin).toBeUndefined();
+    }
   });
 });

@@ -948,12 +948,15 @@ export function pickTopology(
   // Clone before overriding: a library doc is shared by every candidate in the run, and the
   // search must not leave a mark on it. The operating range is dropped: the picker answers
   // which design types are FEASIBLE on this spec, and whether a chosen design then holds across
-  // its range is a question for that design, on its own sheet. A sheet that does not validate
-  // keeps its range, so that a defect IN the range still stops the candidate the way it stops
-  // the sheet everywhere else, instead of vanishing with the part that carried it.
+  // its range is a question for that design, on its own sheet. A sheet that does not validate is
+  // refused before any search, whole range included, so that a defect IN the range still stops
+  // the candidate the way it stops the sheet everywhere else, instead of vanishing with the part
+  // that carried it: one entry that cannot be read is the answer, not a search that cannot close.
   const whole = cloneDoc(sheet.doc);
-  const valid = !validateSheet(resolvedSheet(whole, refs).doc).some((w) => w.severity === 'error');
-  const base = valid ? withoutRange(whole) : whole;
+  const invalid = validateSheet(resolvedSheet(whole, refs).doc)
+    .filter((w) => w.severity === 'error')
+    .map((w) => w.message);
+  const base = invalid.length ? whole : withoutRange(whole);
   const { ignored, over } = applySpec(base, spec);
   const applied = Object.keys(over);
   const supplied = SPEC_FIELDS.filter((f) => {
@@ -976,9 +979,12 @@ export function pickTopology(
   // A device the table cannot answer for (see SizingReport.unswept). No knob sizes it, and the
   // checks that fail beside it were evaluated on a design with that device missing — so there
   // is nothing to search and no binding check to report: the refusal is the whole answer.
-  const refused = refusedIn(res0);
+  const refused = invalid.length ? invalid : refusedIn(res0);
 
-  if (closes(res0)) {
+  if (invalid.length) {
+    verdict = 'could-not-be-searched';
+    stopNote = invalid.join('; ');
+  } else if (closes(res0)) {
     verdict = 'closed';
   } else if (refused.length) {
     verdict = 'could-not-be-searched';
