@@ -1001,6 +1001,8 @@ function notReadText(d: NotReadData): Line[] {
           ? t`The entry ${nm(where)} holds a value that is not valid.`
           : t`An entry of the sheet holds a value that is not valid.`;
   // A field of one entry that is not well formed: the entry, as its rule knows it.
+  // A block that refers to a sheet the library does not hold: the block and the reference.
+  if (d.why === 'reference' && where) return [reason];
   if (d.why === 'field' && d.entry && where)
     return [(d.field && fieldLine(d.entry, where, d.field)) || entryLine(d.entry, where)];
   const reads =
@@ -1087,11 +1089,15 @@ function entryLine(entry: NonNullable<NotReadData['entry']>, where: string): Lin
     case 'device':
       return t`The device of this sheet is not well formed.`;
     case 'block':
-      return t`The entry of block ${n} is not well formed.`;
+      return where.trim() && where !== 'blocks'
+        ? t`The entry of block ${n} is not well formed.`
+        : t`A block of the sheet has no name.`;
     case 'expression':
       return t`The expression of ${n} is not well formed.`;
     case 'range-end':
-      return t`Range end ${n} is not well formed.`;
+      return where === 'operatingRange'
+        ? t`A range end of the operating range is not well formed.`
+        : t`Range end ${n} is not well formed.`;
   }
 }
 
@@ -1224,11 +1230,11 @@ const SIZING_WORD = {
 /** The parser's reasons that a plain sentence says, by the start of its words. A reason with no
  *  entry gives no line. */
 const SYNTAX_REASONS: readonly (readonly [RegExp, Line])[] = [
-  [/^Unclosed \(/, t`A bracket is not closed.`],
-  [/^Unclosed \[/, t`A square bracket is not closed.`],
+  [/^Unclosed \(/, t`A parenthesis is not closed.`],
+  [/^Unclosed \[/, t`An opening ${ex('[')} has no ${ex(']')} that closes it.`],
   [/^Unclosed quote/, t`A quotation is not closed.`],
-  [/^Expected \)/, t`A bracket is not closed.`],
-  [/^Unexpected "\)"/, t`A closing bracket has no bracket that it closes.`],
+  [/^Expected \)/, t`A parenthesis is not closed.`],
+  [/^Unexpected "\)"/, t`A closing parenthesis has no parenthesis that it closes.`],
   [/^Expected expression after/, t`An operator has nothing after it.`],
   [/^Variable names cannot start with a number/, t`A name starts with a digit.`],
 ];
@@ -1304,6 +1310,16 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
     ];
   }
   // A range end whose `set` gives no number against the design run.
+  if (d.rangeEnd && d.why === 'syntax') {
+    const why = d.syntax ? syntaxReason(d.syntax.problem) : undefined;
+    return [
+      t`Range end ${nm(d.rangeEnd.name)} sets ${nm(d.rangeEnd.param)} to ${ex(d.rangeEnd.expression)}, which has a syntax error.`,
+      ...(d.syntax?.at !== undefined
+        ? [t`The error is at character ${String(d.syntax.at + 1)}.`]
+        : []),
+      ...(why ? [why] : []),
+    ];
+  }
   if (d.rangeEnd && d.why === 'not-defined')
     return [
       t`Range end ${nm(d.rangeEnd.name)} sets ${nm(d.rangeEnd.param)} to ${ex(d.rangeEnd.expression)}.`,

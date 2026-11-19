@@ -117,10 +117,18 @@ function legacyFailure(c: Cause): SolveFailure {
  * Today's yes-or-no feasibility of one evaluation, from its items: every item ok, except a
  * requirement that is advisory, which gates nothing. A requirement that could not be calculated
  * counts as failing ("fails closed"), as it does today, though its verdict is undetermined.
- * `advisory` names the requirements that are advisory, by their path in the list.
+ * `advisory` names the requirements that are advisory, by their path in the list; `ends` are the
+ * range ends' own lists.
  */
-export function legacyFeasible(items: readonly Item[], advisory: ReadonlySet<string>): boolean {
+export function legacyFeasible(
+  items: readonly Item[],
+  advisory: ReadonlySet<string>,
+  ends: readonly (readonly Item[] | undefined)[] = [],
+): boolean {
   const quiet = quietIn(items);
+  // A finding of validation about one range end is on that end's own list, and blocks today's
+  // feasibility as every validation error does.
+  if (ends.some((list) => (list ?? []).some(fromValidation))) return false;
   return items.every(
     (i) =>
       i.status === 'ok' ||
@@ -187,7 +195,19 @@ export function legacyPointState(
   all: readonly Item[],
   advisory: ReadonlySet<string>,
 ): 'complies' | 'does-not-comply' | 'no-answer' {
-  const items = all.filter((i) => !fromValidation(i));
+  // A value that waits only on a finding of validation is left out with it: today it gave no
+  // number, which the requirements that read it are judged on. A search or a block that waits on
+  // one was not found or not evaluated, and leaves no answer.
+  const validated = all.filter(fromValidation);
+  const onValidation = (i: Item): boolean =>
+    i.kind === 'value' &&
+    i.status === 'withheld' &&
+    i.on.every((o) =>
+      validated.some(
+        (v) => v.kind === o.kind && v.name === o.name && v.path.join('.') === o.path.join('.'),
+      ),
+    );
+  const items = all.filter((i) => !fromValidation(i) && !onValidation(i));
   const design = items.filter((i) => !netlistFinding(i));
   const assumed = design.some(
     (i) =>

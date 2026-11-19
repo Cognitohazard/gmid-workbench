@@ -1173,9 +1173,9 @@ group('the parser’s reason for a syntax error, where a plain sentence says it'
         },
       }).lines.slice(2);
     };
-    expect(at('a + (b')).toEqual(['A bracket is not closed.']);
-    expect(at('f(a')).toEqual(['A bracket is not closed.']);
-    expect(at('(a))')).toEqual(['A closing bracket has no bracket that it closes.']);
+    expect(at('a + (b')).toEqual(['A parenthesis is not closed.']);
+    expect(at('f(a')).toEqual(['A parenthesis is not closed.']);
+    expect(at('(a))')).toEqual(['A closing parenthesis has no parenthesis that it closes.']);
     expect(at('a +* b')).toEqual(['An operator has nothing after it.']);
     expect(at('1a + b')).toEqual(['A name starts with a digit.']);
     expect(at('a ? b')).toEqual([]);
@@ -1269,5 +1269,67 @@ group('the texts the audit of the item data asked for', () => {
       marginPct: -0.5,
     });
     expect(textOf(c).lines[1]).toBe('x is 1, and the check requires a value related by >> to 2.');
+  });
+});
+
+group('the texts that name the value a field holds', () => {
+  const field = (
+    entry: NonNullable<NotReadData['entry']>,
+    where: string,
+    f: NonNullable<NotReadData['field']>,
+    why: 'field' | 'reference' = 'field',
+  ): readonly string[] =>
+    describe(
+      failed('sheet', '', { kind: 'not-read', data: { why, where, message: '', entry, field: f } }),
+    ).lines;
+  it('says what the value is and what it must be', () => {
+    const cases: [readonly string[], string][] = [
+      [
+        field('param', 'I_tail', { name: 'value', value: 'abc', problem: 'not-a-number' }),
+        'The engine cannot read I_tail, because its value abc is not a number.',
+      ],
+      [
+        field('selector', 'ld_sign', { name: 'value', value: 5, problem: 'sign' }),
+        'ld_sign is 5, and a sign convention must be +1 or −1.',
+      ],
+      [
+        field('tolerance', 'eq', { name: 'tolPct', value: 'x', problem: 'not-a-number' }),
+        'The engine cannot read the tolerance of check eq, because x is not a number of zero or more.',
+      ],
+      [
+        field('range-end', 'cm-lo', { name: 'set', key: 'NOPE', problem: 'unknown-name' }),
+        'Range end cm-lo sets NOPE, which is not a value of this sheet.',
+      ],
+      [
+        field('block', 'tail', { name: 'params', key: 'nope', problem: 'unknown-name' }),
+        'Block tail sets nope, and its sheet has no value of that name.',
+      ],
+      [
+        field('check', 'gain-spec', { name: 'op', value: '>>', problem: 'operator' }),
+        'The engine cannot read check gain-spec, because >> is not an operator that it knows.',
+      ],
+    ];
+    for (const [lines, want] of cases) expect(lines).toEqual([want]);
+    expect(
+      field('block', 'bias', { name: 'ref', value: 'nope/nope', problem: 'no-sheet' }, 'reference'),
+    ).toContain(
+      'Block bias refers to the sheet nope/nope, and the library holds no sheet of that name.',
+    );
+  });
+
+  it('names a level that cannot hold its wire', () => {
+    const net = (n: NetlistAbout): readonly string[] =>
+      describe(
+        failed('sheet', '', {
+          kind: 'not-determined',
+          data: { why: 'netlist', names: [], message: '', netlist: [n] },
+        }),
+      ).lines.slice(1);
+    expect(net({ problem: 'level-refused', wires: ['vinp'], level: 'CM_dc + V_tail' })).toEqual([
+      'Wire vinp cannot be held at CM_dc + V_tail, because a level reads only numbers and values classed independent.',
+    ]);
+    expect(net({ problem: 'level-gate', wires: ['x'], devices: ['ld'], level: 'vg' })).toEqual([
+      'Wire x cannot be held at vg, because that level holds only the gate of part ld.',
+    ]);
   });
 });

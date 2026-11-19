@@ -20,7 +20,7 @@ import {
   passthroughKeys,
   passthroughName,
 } from '../namespace';
-import { additiveCoefficient, createEngine, scalarScope } from '../expr';
+import { additiveCoefficient, createEngine, scalarScope, syntaxAt } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery, type SizeResult } from '../device';
 import { fixTable } from '../series';
 import { bracketGrid, diodeGrid, offHull } from '../grid';
@@ -1371,11 +1371,10 @@ function evalBlocks(
             status: 'failed',
             cause: {
               kind: 'not-read',
-              data: {
-                why: block.ref !== undefined && !block.doc ? 'reference' : 'field',
-                where: block.name,
-                message,
-              },
+              data:
+                block.ref !== undefined && !block.doc
+                  ? { why: 'reference', where: block.name, message }
+                  : { why: 'field', where: block.name, message, entry: 'block' },
             },
           },
         ],
@@ -4291,6 +4290,44 @@ export function pointOutcome(
   return { sized, ...answer };
 }
 
+/** Why a range end's `set` expression gives no number against the design run, by the withholding
+ *  rule: a syntax error, with where the parser stops; a name that no entry declares; else a number
+ *  that is not finite. */
+function rangeEndCause(
+  end: string,
+  param: string,
+  expr: unknown,
+  values: Readonly<Record<string, number>>,
+): Cause {
+  const expression = typeof expr === 'string' ? expr : String(expr);
+  const rangeEnd = { name: end, param, expression };
+  const reason = 'did not evaluate to a finite number against the base result';
+  const syntax = syntaxAt(expression);
+  if (syntax)
+    return {
+      kind: 'cannot-evaluate',
+      data: {
+        why: 'syntax',
+        name: expression,
+        reason,
+        syntax: { expression, ...syntax },
+        rangeEnd,
+      },
+    };
+  const undeclared = namesOf(expression).find(
+    (n) =>
+      !Object.prototype.hasOwnProperty.call(values, n) &&
+      !Object.prototype.hasOwnProperty.call(CONSTANTS, n),
+  );
+  return {
+    kind: 'cannot-evaluate',
+    data:
+      undeclared !== undefined
+        ? { why: 'not-defined', name: undeclared, reason, rangeEnd }
+        : { why: 'not-finite', name: expression, reason, rangeEnd },
+  };
+}
+
 /** One range end: resolve its `set` expressions against the base result, re-evaluate the
  *  FIXED-HARDWARE form of the doc with those values (through evaluateNode, so the run cannot
  *  recurse into range ends), and classify the outcome (see RangeEndReport.state):
@@ -4339,15 +4376,7 @@ function runRangeEnd(
       return unanswered(
         `range end "${rangeEnd.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
           `number against the base result`,
-        {
-          kind: 'cannot-evaluate',
-          data: {
-            why: 'not-finite',
-            name: expr,
-            reason: 'did not evaluate to a finite number against the base result',
-            rangeEnd: { name: rangeEnd.name, param, expression: expr },
-          },
-        },
+        rangeEndCause(rangeEnd.name, param, expr, base.values),
       );
     over[param] = v;
   }

@@ -145,9 +145,17 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
               path: [],
               name: p.name,
               status: 'failed',
+              // Validation's own finding, which every run of the sheet carries on this item.
               cause: {
                 kind: 'not-read',
-                data: { why: 'field', where: p.name, message: '', entry: 'param' },
+                data: {
+                  why: 'field',
+                  where: p.name,
+                  message: `param "${p.name}" is not a finite number`,
+                  entry: 'param',
+                  field: { name: 'value', value: p.value, problem: 'not-a-number' },
+                  stage: 'validation',
+                },
               },
             },
       );
@@ -656,6 +664,9 @@ function locate(doc: SheetDoc | undefined, location: string | undefined): ItemRe
   if (quoted)
     return { kind: quoted[1] === 'check' ? 'requirement' : 'value', path: [], name: quoted[2] };
   if (/^given /.test(location ?? '')) return { kind: 'device', path: [], name: 'givens' };
+  // A block with no name: its own sheet item, under the empty name, holds what is wrong with it.
+  if (location === 'blocks' && doc?.blocks?.some((b) => !b?.name?.trim()))
+    return { kind: 'sheet', path: [''], name: '' };
   const parts = (location ?? '').split('.').filter(Boolean);
   const path: string[] = [];
   let d = doc;
@@ -941,11 +952,19 @@ function nextCause(prior: Cause, found: Cause): Cause {
   const assumed = prior.kind === 'not-determined' && prior.data.why === 'assumed-level';
   const fromEvaluation =
     !('stage' in prior.data) || (prior.data as { stage?: string }).stage !== 'validation';
+  // A syntax error the evaluation read, with where the parser stops, is the more specific of the
+  // two where validation found the same expression does not parse.
+  const sameSyntax =
+    prior.kind === 'cannot-evaluate' &&
+    prior.data.why === 'syntax' &&
+    found.kind === 'not-read' &&
+    found.data.field?.problem === 'syntax';
   if (
     found.kind === 'not-read' &&
-    found.data.why === 'field' &&
+    (found.data.why === 'field' || found.data.why === 'reference') &&
     found.data.stage === 'validation' &&
-    fromEvaluation
+    fromEvaluation &&
+    !sameSyntax
   )
     return found;
   return assumed ? found : prior;
@@ -973,7 +992,11 @@ export function withFindings(
     if (mode === 'evaluation' && ref.path.length) continue;
     const cause = withSyntax(withStatements(findingCause(w, ref, mode), doc), ref, doc);
     const at = out.findIndex(
-      (i) => i.kind === ref.kind && i.name === ref.name && i.path.join('.') === ref.path.join('.'),
+      (i) =>
+        i.kind === ref.kind &&
+        i.name === ref.name &&
+        i.path.length === ref.path.length &&
+        i.path.every((p, k) => p === ref.path[k]),
     );
     const prior = out[at];
     if (at < 0) out.push({ ...ref, status: 'failed', cause });
