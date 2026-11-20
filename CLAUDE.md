@@ -132,8 +132,8 @@ must not change:
   page. Delete a block when they rule on it — resolved decisions belong in a commit message
   or a plan doc. Reference that section by its `#calls` anchor, never by ordinal.
 
-**Maintain it at commit-batch time, not per commit** — after the cleanup pass and the
-test gate, before reporting done. Refresh when the batch changed a doctrine, a contract,
+**Maintain it at commit-batch time, not per commit** — after the review and the test
+gate, before reporting done. Refresh when the batch changed a doctrine, a contract,
 a headline number, or the known-broken list; a batch of leaf fixes needs no edit. To find
 out whether you have drifted:
 `git rev-list --count --since="@$(stat -c %Y [.claude/artifacts/project_tour.html])" HEAD`
