@@ -57,3 +57,46 @@ option {
   color: var(--fg);
   background-color: var(--bg);
 }
+
+/* The looks of the verdicts (verdict.ts gives each verdict its class and glyph). Each look differs
+   from the others by its border and fill as well as its colour, so the four read apart without
+   colour too:
+   - v-ok (feasible, compliant): solid fill.
+   - v-fail (non-compliant): solid 2px border, no fill.
+   - v-proved (infeasible, no operating point; only ever a proved verdict): 3px double border on a
+     dark fill.
+   - v-open (undetermined): grey, dashed border, no fill. It is an open question, not a warning.
+   - v-none (not calculated): no border, dimmed italic, no verdict word. */
+.v-ok,
+.v-fail,
+.v-proved,
+.v-open {
+  display: inline-block;
+  padding: 0.04rem 0.45rem;
+  border-radius: 0.6rem;
+  font-weight: 600;
+  white-space: normal;
+}
+.v-ok {
+  background: var(--ok);
+  border: 1px solid var(--ok);
+  color: #fff;
+}
+.v-fail {
+  border: 2px solid var(--err);
+  color: var(--err);
+}
+.v-proved {
+  border: 3px double #fff;
+  outline: 1px solid #7a1f2c;
+  background: #7a1f2c;
+  color: #fff;
+}
+.v-open {
+  border: 1px dashed currentColor;
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+}
+.v-none {
+  font-style: italic;
+  opacity: 0.55;
+}

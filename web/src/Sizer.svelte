@@ -486,7 +486,8 @@
       <dd>{formatSI(r.quantities.gm_gds)}</dd>
     </dl>
     <p class="feas {r.feasible ? 'ok' : 'bad'}">
-      {r.feasible ? '✓ feasible' : '✗ infeasible'} · ceiling {formatSI(r.ceiling)}
+      The gm/ID of {formatSI(r.gm_id)} S/A is {r.gm_id <= r.ceiling ? 'below' : 'above'} the table’s ceiling
+      of {formatSI(r.ceiling)} S/A at this length.
       <button class="copy" onclick={copyReport} title="copy the sized numbers as name/value lines"
         >{copied ? 'copied ✓' : 'copy'}</button
       >
