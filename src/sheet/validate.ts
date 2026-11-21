@@ -2399,6 +2399,7 @@ function blockProblems(doc: SheetDoc, depth: number, open: OpenRanges | undefine
               severity: 'error',
               message: `block "${block.name}" overrides "${k}", which is not a param of the child`,
               location: block.name,
+              about: { kind: 'entry', field: 'params', key: k, problem: 'unknown-name' },
             });
           }
         }

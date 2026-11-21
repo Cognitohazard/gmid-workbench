@@ -389,7 +389,7 @@ export interface Segment {
 export type Line = readonly Segment[];
 
 /** A name from the sheet, as a segment. */
-const nm = (text: string, ref?: ItemRef): Segment => ({
+export const nm = (text: string, ref?: ItemRef): Segment => ({
   kind: 'name',
   text,
   ...(ref ? { ref } : {}),
@@ -403,7 +403,7 @@ const isSegment = (p: Part): p is Segment => typeof p === 'object' && !Array.isA
 
 /** Builds a line: the template's own text is text, an interpolated string is text, and a segment
  *  or a line is spliced in as it is. Neighbouring text segments are joined. */
-function t(strings: TemplateStringsArray, ...parts: Part[]): Line {
+export function t(strings: TemplateStringsArray, ...parts: Part[]): Line {
   const out: Segment[] = [];
   const push = (s: Segment): void => {
     if (!s.text) return;
@@ -431,7 +431,7 @@ function t(strings: TemplateStringsArray, ...parts: Part[]): Line {
 export const lineText = (line: Line): string => line.map((s) => s.text).join('');
 
 /** Lines joined as a list reads: "a, b and c". */
-const andLines = (ls: readonly Line[]): Line =>
+export const andLines = (ls: readonly Line[]): Line =>
   ls.reduce<Line>(
     (acc, l, k) => (k === 0 ? l : t`${acc}${k === ls.length - 1 ? ' and ' : ', '}${l}`),
     [],
@@ -1769,7 +1769,9 @@ const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
  *  point has no design where one of them is not complete (incompleteOn) for a reason other than
  *  the statements; else its statements do not determine one design; else it rests on an assumed
  *  level. Undefined where none of these is what the items say. */
-function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
+/** Why the engine did not calculate a range end, from the end's own item: the clause its pointers
+ *  into the design point's list give ("the design point has no design"). */
+export function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
   const items = on.flatMap((r) => {
     const i = r.frame === 'design' ? pointedAt(r, design) : undefined;
     return i ? [i] : [];

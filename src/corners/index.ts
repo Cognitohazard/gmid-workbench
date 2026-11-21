@@ -77,7 +77,8 @@ import {
   validateSheet,
 } from '../sheet';
 import { isHardCheck } from '../sheet/types';
-import { isComplete, marginReadable, type Item } from '../sheet/states';
+import { incompleteOn, isComplete, marginReadable, type Item, type ItemRef } from '../sheet/states';
+import { withFindings } from '../sheet/items';
 import {
   assumedLevelRefusal,
   holdHardware,
@@ -499,11 +500,50 @@ export type ConditionIssueKind =
   | 'no-design'
   | 'assumed-level';
 
-export interface ConditionIssue {
-  readonly kind: ConditionIssueKind;
-  /** The device the issue is about, when it is about one. */
-  readonly device?: string;
-  readonly message: string;
+/**
+ * Why a condition was not evaluated, as data a text can be written from. `message` is the old
+ * sentence, kept until the fields that read it are removed; nothing new reads it.
+ *  - `absent-condition`: a device the run needs is not there. `missing: 'device'` — a block names a
+ *    device that is not loaded (`block` is the block's path); `missing: 'condition'` — the device
+ *    has no table at this condition (`block`, where a block asked for it).
+ *  - `ambiguous-condition`: two or more tables of `device` claim this condition.
+ *  - `incompatible-table`: the tables of `device` do not sweep the same axes, so none projects.
+ *  - `invalid-sheet-or-ref`: validation found an error; `on` is the item it is on, in the item list
+ *    the declined run carries (ConditionRun.items), the same list and cause the sheet shows.
+ *  - `runtime-evaluation`: the run did not complete; `on` is the failed items whose number is not
+ *    there (incompleteOn). Its text is the items' own.
+ *  - `no-design`: there is no design to hold. `reason: 'no-base'` — several conditions are asked
+ *    about and none is the one the design is sized at; `'base-not-evaluated'` — the design was not
+ *    evaluated at `base`, where it is sized.
+ *  - `assumed-level`: the design rests on the levels `names`, classed assumed.
+ */
+export type ConditionIssue = { readonly message: string } & (
+  | {
+      readonly kind: 'absent-condition';
+      readonly device: string;
+      readonly missing: 'device' | 'condition';
+      readonly block?: string;
+    }
+  | { readonly kind: 'ambiguous-condition'; readonly device: string; readonly block?: string }
+  | { readonly kind: 'incompatible-table'; readonly device: string; readonly block?: string }
+  | { readonly kind: 'invalid-sheet-or-ref'; readonly on: readonly ItemRef[] }
+  | { readonly kind: 'runtime-evaluation'; readonly on: readonly ItemRef[] }
+  | { readonly kind: 'no-design'; readonly reason: 'no-base' }
+  | {
+      readonly kind: 'no-design';
+      readonly reason: 'base-not-evaluated';
+      readonly base: ConditionKey;
+    }
+  | { readonly kind: 'assumed-level'; readonly names: readonly ItemRef[] }
+);
+
+/** An item's reference, without its status. */
+const refOf = (i: ItemRef): ItemRef => ({ kind: i.kind, path: i.path, name: i.name });
+
+/** A value named with its block path (`stage1.V_out`) as the reference of its item. */
+function valueRef(qualified: string): ItemRef {
+  const parts = qualified.split('.');
+  return { kind: 'value', path: parts.slice(0, -1), name: parts[parts.length - 1] };
 }
 
 /**
@@ -551,6 +591,9 @@ export type ConditionRun =
       readonly feasible: boolean;
       /** The centre first, then one point per range end the sheet declares, in document order. */
       readonly points: readonly CompliancePoint[];
+      /** The held design over this run's range ends (heldVerdictOver). Absent where the run has no
+       *  range end the engine calculated. */
+      readonly endsVerdict?: HeldVerdictOver;
       readonly result: SheetResult;
     }
   | {
@@ -561,9 +604,14 @@ export type ConditionRun =
       readonly issues: readonly ConditionIssue[];
       /** The same points an evaluated run carries, none of them `complies`. */
       readonly points: readonly CompliancePoint[];
+      /** The held design over this run's range ends, as on an evaluated run. */
+      readonly endsVerdict?: HeldVerdictOver;
       /** Kept when an evaluation ran and did not stand, so its diagnostics survive the
        *  refusal — the numbers are how an author finds out why. */
       readonly result?: SheetResult;
+      /** On a condition declined because the sheet does not validate: the sheet's item list built
+       *  from validation's findings (withFindings), which the issues point into. */
+      readonly items?: readonly Item[];
       /** On a condition asked about and declined with no answer, before anything ran: the DC
        *  wiring report saying the check did not run (see unwalkedReport), as a range end declined
        *  the same way carries it. */
@@ -633,6 +681,8 @@ function preflightBindings(
       issues.push({
         kind: 'absent-condition',
         device: b.binding,
+        missing: 'device',
+        block: b.path,
         message: `block "${b.path}" names device "${b.binding}", which is not loaded`,
       });
       continue;
@@ -640,7 +690,7 @@ function preflightBindings(
     // A child bound to the primary's own device was already preflighted above; a second
     // issue for the same missing condition would list one problem twice.
     if (device.deviceUid === primaryDevice.deviceUid) continue;
-    memberFor(device, key, `block "${b.path}"`, issues, primaryDevice);
+    memberFor(device, key, `block "${b.path}"`, issues, primaryDevice, b.path);
   }
   return { primary, issues };
 }
@@ -656,6 +706,8 @@ interface PreparedRun {
    *  does with them, and read here for the blockers so the sheet is validated once, not twice. */
   readonly warnings: readonly QAWarning[];
   readonly blockers: readonly ConditionIssue[];
+  /** The item list validation's findings make (withFindings), where there are blockers. */
+  readonly items?: readonly Item[];
   readonly bindings: readonly NamedBinding[];
   /** The assumed DC inputs of the resolved tree — a fact about the document, so it is the same
    *  for every condition and attached to each result as `runSheet` attaches it. */
@@ -665,13 +717,21 @@ interface PreparedRun {
 function prepareRun(doc: SheetDoc, refs?: SheetRefIndex): PreparedRun {
   const resolved = resolvedSheet(doc, refs);
   const warnings = validateSheet(resolved.doc);
-  const blockers = [...resolved.warnings, ...warnings]
-    .filter((w) => w.severity === 'error')
-    .map((w): ConditionIssue => ({ kind: 'invalid-sheet-or-ref', message: w.message }));
+  const errors = [...resolved.warnings, ...warnings].filter((w) => w.severity === 'error');
+  // Each finding on the item it is about, with the cause the sheet gives it: the same function the
+  // sheet's own run uses for validation's findings, from the findings alone.
+  const blockers = errors.map((w): ConditionIssue => ({
+    kind: 'invalid-sheet-or-ref',
+    on: withFindings([], [w], resolved.doc, 'validation', { uncovered: true }).map(refOf),
+    message: w.message,
+  }));
   return {
     doc: resolved.doc,
     warnings,
     blockers,
+    ...(errors.length
+      ? { items: withFindings([], errors, resolved.doc, 'validation', { uncovered: true }) }
+      : {}),
     assumptions: dcInputs(resolved.doc).assumed,
     // The tree is already resolved, so this walk adds no warnings of its own.
     bindings: blockers.length ? [] : namedBindings(resolved.doc).bindings,
@@ -786,6 +846,7 @@ function runSet(
     return keys.map((key) =>
       declined(key, 'not-run', {
         kind: 'no-design',
+        reason: 'no-base',
         message:
           'several conditions are asked about and none is designated nominal — the design ' +
           'has to be sized at one condition before it can be held at the others',
@@ -816,13 +877,19 @@ function runSet(
       state: 'not-run',
       issue: {
         kind: 'no-design',
+        reason: 'base-not-evaluated',
+        base: at,
         message: `the design was not evaluated at ${conditionLabelIn(primaryDevice, at)}, where it is sized, so there is nothing to hold here`,
       },
     };
   else if (prepared.assumptions.length)
     refusal = {
       state: 'no-answer',
-      issue: { kind: 'assumed-level', message: assumedLevelRefusal(prepared.assumptions) },
+      issue: {
+        kind: 'assumed-level',
+        names: prepared.assumptions.map(valueRef),
+        message: assumedLevelRefusal(prepared.assumptions),
+      },
     };
   else held = withNominalRange(holdHardware(prepared.doc, sized.result), sized.result);
 
@@ -938,6 +1005,9 @@ function refused(
     issues,
     points: [point(), ...ends.map((e) => point(e.name))],
     ...(nodes ? { nodes } : {}),
+    ...(prepared.items && issues.some((i) => i.kind === 'invalid-sheet-or-ref')
+      ? { items: prepared.items }
+      : {}),
   };
 }
 
@@ -964,6 +1034,7 @@ function runPrepared(
     return refused(prepared, key, design, 'no-answer', [
       {
         kind: 'runtime-evaluation',
+        on: held.unheld.map(valueRef),
         message: `no gate bias was recorded for the held ${held.unheld.join(', ')}`,
       },
     ]);
@@ -1021,6 +1092,8 @@ function runPrepared(
     })),
   ];
 
+  const endsVerdict = heldVerdictOver(points.slice(1).map((point) => ({ key, point })));
+  const ends = endsVerdict ? { endsVerdict } : {};
   if (!completed)
     return {
       state: 'not-evaluated',
@@ -1028,6 +1101,7 @@ function runPrepared(
       design,
       issues: runtimeIssues(result),
       points,
+      ...ends,
       result,
     };
   return {
@@ -1037,6 +1111,7 @@ function runPrepared(
     ...(held?.assumedSource.length ? { assumedSource: [...held.assumedSource] } : {}),
     feasible: result.feasible,
     points,
+    ...ends,
     result,
   };
 }
@@ -1073,6 +1148,7 @@ export function canProjectAt(
     return {
       kind: 'absent-condition',
       device: device.device,
+      missing: 'condition',
       message: `"${device.device}" is not characterized at ${conditionLabelIn(asked, key)}`,
     };
   }
@@ -1088,18 +1164,90 @@ function memberFor(
   where: string,
   issues: ConditionIssue[],
   asked: CharacterizedDevice = device,
+  block?: string,
 ): DeviceTable | undefined {
   const issue = canProjectAt(device, key, asked);
   if (issue) {
-    issues.push({ ...issue, message: `${where}: ${issue.message}` });
+    issues.push({
+      ...issue,
+      ...(block === undefined ? {} : { block }),
+      message: `${where}: ${issue.message}`,
+    });
     return undefined;
   }
   return tableAt(device, key);
 }
 
-/** Why an evaluation did not complete, from the result itself (see unfinishedBecause). */
-const runtimeIssues = (res: SheetResult): ConditionIssue[] =>
-  unfinishedBecause(res).map((message) => ({ kind: 'runtime-evaluation', message }));
+/** Why an evaluation did not complete, from the result itself (see unfinishedBecause). Each issue
+ *  points at the failed items whose number is not there (incompleteOn), whose own text says why. */
+const runtimeIssues = (res: SheetResult): ConditionIssue[] => {
+  const on = incompleteOn(res.items ?? [])
+    .filter((i) => i.status === 'failed')
+    .map(refOf);
+  return unfinishedBecause(res).map((message) => ({ kind: 'runtime-evaluation', on, message }));
+};
+
+// --- one verdict over held points --------------------------------------------
+
+/** One point of a condition run: its condition, and its range end (absent at the centre). */
+export interface PointAt {
+  readonly key: ConditionKey;
+  readonly rangeEnd?: string;
+}
+
+/** What one held design is over several points, and the points that decide it. */
+export interface HeldVerdictOver {
+  readonly verdict: HeldVerdict;
+  /** The points that decide the verdict: the non-compliant ones; the ones with no operating point;
+   *  for undetermined, the undetermined ones and the ones the engine did not calculate; none where
+   *  the design is compliant at every point. */
+  readonly decidedBy: readonly PointAt[];
+}
+
+/**
+ * The order in which one held verdict over several points is decided: the first word any point
+ * has decides; compliant only where every point is. A point the engine did not calculate counts as
+ * undetermined. Where "no operating point" stands in this order is open; it is kept here, in one
+ * place, so that a ruling changes one line.
+ */
+export const HELD_PRECEDENCE: readonly Exclude<HeldVerdict, 'compliant'>[] = [
+  'non-compliant',
+  'no-operating-point',
+  'undetermined',
+];
+
+/**
+ * One held verdict over a list of points (HELD_PRECEDENCE), with the points that decide it. A point
+ * with no verdict was not calculated. Absent where no point in the list has a verdict. Reads only
+ * each point's verdict word, and copies nothing from the points.
+ */
+export function heldVerdictOver(
+  points: readonly { readonly key: ConditionKey; readonly point: CompliancePoint }[],
+): HeldVerdictOver | undefined {
+  if (!points.some((p) => p.point.verdict)) return undefined;
+  const at = (p: (typeof points)[number]): PointAt => ({
+    key: p.key,
+    ...(p.point.rangeEnd === undefined ? {} : { rangeEnd: p.point.rangeEnd }),
+  });
+  const word = (p: (typeof points)[number]): HeldVerdict =>
+    (p.point.verdict?.verdict as HeldVerdict | undefined) ?? 'undetermined';
+  for (const verdict of HELD_PRECEDENCE) {
+    const deciding = points.filter((p) => word(p) === verdict);
+    if (deciding.length) return { verdict, decidedBy: deciding.map(at) };
+  }
+  return { verdict: 'compliant', decidedBy: [] };
+}
+
+/** The held points of a set of runs: every point but the centre of the condition the design is
+ *  sized at, in run order and the centre before the range ends. */
+const heldPointsOf = (
+  runs: readonly ConditionRun[],
+): { key: ConditionKey; point: CompliancePoint }[] =>
+  runs.flatMap((r) =>
+    r.points
+      .filter((_, i) => !(r.design === 'sized' && i === 0))
+      .map((point) => ({ key: r.key, point })),
+  );
 
 // --- aggregation -------------------------------------------------------------
 
@@ -1120,13 +1268,26 @@ export interface ConditionAggregate {
   readonly verdict?: Verdict<DesignVerdict>;
   /** Every held point — each range end of every condition and the centre of each condition the
    *  design is held at — counted by its held verdict; a point the engine calculated nothing at is
-   *  `notRun`. `total` is every point but the base condition's centre. */
+   *  `notCalculated`. `total` is every point but the base condition's centre. */
   readonly heldPoints: {
     readonly compliant: number;
     readonly nonCompliant: number;
     readonly noOperatingPoint: number;
     readonly undetermined: number;
-    readonly notRun: number;
+    readonly notCalculated: number;
+    readonly total: number;
+  };
+  /** The held design over those same points (heldVerdictOver). Absent where the engine calculated
+   *  none of them. */
+  readonly heldVerdict?: HeldVerdictOver;
+  /** The points the margins below are read at (measuredPoints), and every point, with what the
+   *  others are: not calculated, a point with no verdict, as in heldPoints (`notCalculated`); or
+   *  calculated with no margin to read, because the verdict there says nothing of the design or the
+   *  run is not complete (`unreadable`). */
+  readonly marginPoints: {
+    readonly read: number;
+    readonly unreadable: number;
+    readonly notCalculated: number;
     readonly total: number;
   };
   /**
@@ -1150,6 +1311,8 @@ export interface ConditionAggregate {
   readonly worst: {
     readonly id: string;
     readonly marginPct: number;
+    /** The check's status at that point: whether the tightest hard requirement fails there. */
+    readonly status: CheckStatus;
     readonly key: ConditionKey;
     readonly rangeEnd?: string;
   } | null;
@@ -1206,7 +1369,7 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
     nonCompliant: 0,
     noOperatingPoint: 0,
     undetermined: 0,
-    notRun: 0,
+    notCalculated: 0,
     total: 0,
   };
   const HELD = {
@@ -1215,17 +1378,18 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
     'no-operating-point': 'noOperatingPoint',
     undetermined: 'undetermined',
   } as const;
-  for (const r of unique)
-    r.points.forEach((pt, i) => {
-      if (r.design === 'sized' && i === 0) return;
-      const v = pt.verdict?.verdict as HeldVerdict | undefined;
-      heldPoints[v === undefined ? 'notRun' : HELD[v]]++;
-      heldPoints.total++;
-    });
+  const held = heldPointsOf(unique);
+  for (const { point } of held) {
+    const v = point.verdict?.verdict as HeldVerdict | undefined;
+    heldPoints[v === undefined ? 'notCalculated' : HELD[v]]++;
+    heldPoints.total++;
+  }
+  const heldVerdict = heldVerdictOver(held);
   const verdict = sized?.points[0]?.verdict as Verdict<DesignVerdict> | undefined;
   let worst: ConditionAggregate['worst'] = null;
   const onLimit = new Map<string, { key: ConditionKey; rangeEnd?: string }[]>();
-  for (const { run, point, at } of measuredPoints(unique)) {
+  const measured = measuredPoints(unique);
+  for (const { run, point, at } of measured) {
     const where = {
       key: run.key,
       ...(point.rangeEnd === undefined ? {} : { rangeEnd: point.rangeEnd }),
@@ -1239,18 +1403,41 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
     const limiting = limitingCheck(at);
     if (!limiting) continue;
     const marginPct = clampMargin(limiting.marginPct);
-    if (worst === null || marginPct < worst.marginPct)
-      worst = { id: limiting.id, marginPct, ...where };
+    if (worst === null || marginPct < worst.marginPct) {
+      const status = treeCheckResults({ checks: at.checks, blocks: at.blocks }).get(
+        limiting.id,
+      )!.status;
+      worst = { id: limiting.id, marginPct, status, ...where };
+    }
   }
   return {
     feasibility,
     ...(sized ? { base: sized.key } : {}),
     ...(verdict ? { verdict } : {}),
     heldPoints,
+    ...(heldVerdict ? { heldVerdict } : {}),
+    marginPoints: unreadPoints(unique, measured),
     compliance,
     worst,
     onLimit: [...onLimit].map(([id, points]) => ({ id, points })),
   };
+}
+
+/** The aggregate's account of the points its margins are read at, and of the others. */
+function unreadPoints(
+  runs: readonly ConditionRun[],
+  measured: readonly { readonly point: CompliancePoint }[],
+): ConditionAggregate['marginPoints'] {
+  const read = new Set(measured.map((m) => m.point));
+  const out = { read: read.size, unreadable: 0, notCalculated: 0, total: 0 };
+  for (const r of runs)
+    for (const p of r.points) {
+      out.total++;
+      if (read.has(p)) continue;
+      if (!p.verdict) out.notCalculated++;
+      else out.unreadable++;
+    }
+  return out;
 }
 
 /** One run per condition: the denominator of every fold is unique conditions, so a caller that
