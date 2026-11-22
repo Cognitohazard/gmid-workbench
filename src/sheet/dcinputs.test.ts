@@ -9,7 +9,7 @@ import { additiveCoefficient } from '../expr';
 import { dcInputs, EXAMPLES, exprRoots, runSheet, validateSheet } from './index';
 import { reachedGivens, solvePlan } from './validate';
 import { heldShape } from './coverage';
-import { holdAsConstraint, holds } from './types';
+import { holdAsConstraint, holds, rangePoints } from './types';
 import { GIVENS_FLAGS, type SheetGivens, type SheetDoc, type SheetVar } from './types';
 import { loadLibrary, REFS, sheet, table, notACircuit } from './library.fixtures';
 import { resolveSheetRefs } from './resolve';
@@ -786,14 +786,15 @@ const forwardHits = (doc: SheetDoc, moved: string): string[] => {
   );
 };
 
-/** Forward reach of a top-level param, closed once through the range ends. That closure
- *  is the one deliberate asymmetry between the walks: dcInputs follows a range end back into the
- *  range end's `set` expression, while reachedGivens starts from the param a range end sets and
- *  never reads what the setting is written in — so a param named only in a `set` reaches when the
- *  param that range end sets does. */
+/** Forward reach of a top-level param, closed once through the range points (the corners of the
+ *  operating axes and the named range ends). That closure is the one deliberate asymmetry between
+ *  the walks: dcInputs follows a range point back into the expressions that set it, while
+ *  reachedGivens starts from the param a range point sets and never reads what the setting is
+ *  written in — so a param named only in a `set` or an axis end reaches when the param that point
+ *  sets does. */
 const forward = (doc: SheetDoc, p: string): boolean =>
   forwardHits(doc, p).length > 0 ||
-  (doc.operatingRange ?? []).some((e) =>
+  rangePoints(doc).some((e) =>
     Object.entries(e.set ?? {}).some(
       ([q, x]) =>
         typeof x === 'string' && compileExpr(x).names.includes(p) && forwardHits(doc, q).length > 0,
@@ -875,7 +876,7 @@ describe('dcInputs and reachedGivens agree on which top-level params reach a dev
     expect(forwardHits(ota, 'gm_id_in')).toEqual(
       expect.arrayContaining(['in.gm_id:gm_id_i', 'tail.vds:vds_t', 'inr.id:I_side']),
     );
-    // CM_lo is read by nothing but the cm-lo range end's `set`, so only the range-end closure
+    // CM_lo is read by nothing but the low end of the CM_dc axis, so only the range-point closure
     // reaches it.
     expect(forwardHits(ota, 'CM_lo')).toEqual([]);
     expect(bothWays(ota, 'CM_lo')).toEqual([true, true]);

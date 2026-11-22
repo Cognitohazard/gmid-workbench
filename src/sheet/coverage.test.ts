@@ -1186,7 +1186,7 @@ describe('compliance is only asked of a design that exists', () => {
     // y spans [1, 21] over the constraint's bracket, so the two ends of this sweep have no design
     // and its interior does. The range-end curve must be a GAP at the ends and a real margin
     // between.
-    const sw = sweepSheet(doc, 'Spec', dev, 5);
+    const sw = sweepSheet(doc, 'Spec', dev, 5, undefined, undefined, { range: 'checked' });
     const curve = sw.checks.find((r) => r.rangeEnd === 'lo')!;
     expect(curve.marginPct.map((m) => m === null)).toEqual([true, false, false, false, true]);
     expect(sw.feasible).toEqual([false, true, true, true, false]);

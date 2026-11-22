@@ -596,7 +596,7 @@ group('the aggregate from real runs', () => {
     const [, held] = runConditions(doc, skewed, [tt, key('ff', -40)], noDevices, REFS, tt);
     expect(held.points[0].verdict?.verdict).toBe('undetermined');
     expect(lines(pointText({ run: held, index: 1, device: skewed, doc }))).toEqual([
-      'At ff −40 °C, range end cm-lo sets CM_dc to 1 V.',
+      'At ff −40 °C, range end CM_dc=lo sets CM_dc to 1 V.',
       'The held design is undetermined there, because part cbn is outside its table and part cbp is outside its table.',
     ]);
   });

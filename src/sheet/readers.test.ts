@@ -20,9 +20,10 @@ import {
   type SheetDoc,
   type SheetResult,
 } from './types';
-import { sheet, table, REFS } from './library.fixtures';
+import { namedEnds, sheet, table, REFS } from './library.fixtures';
 
-const ota = sheet('otas/five-transistor-ota.json');
+// The sheet's common-mode range as two named ends, the form these readers were written against.
+const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
 /** Every requirement made advisory, so that none fails and decides the verdict. */
 const soft = (d: SheetDoc): SheetDoc => ({
   ...d,
@@ -132,7 +133,10 @@ group('a design that rests on an assumed level', () => {
   });
 
   it('passes nowhere in a sweep, as its verdict is undetermined, where today it passes', () => {
-    const s = sweepSheet(assumed, 'gm_id_in', table, 3, undefined, REFS, { windows: true });
+    const s = sweepSheet(assumed, 'gm_id_in', table, 3, undefined, REFS, {
+      range: 'checked',
+      windows: true,
+    });
     expect(s.feasible).toEqual([true, true, true]);
     expect(s.verdicts).toEqual(['undetermined', 'undetermined', 'undetermined']);
     expect(s.windows).toEqual([]);
@@ -144,11 +148,17 @@ group('a design that rests on an assumed level', () => {
 
 group('a sweep', () => {
   it('passes where the sample reads feasible, beside today’s flag', () => {
-    const s = sweepSheet(ghost, 'gm_id_in', table, 5, undefined, REFS, { windows: true });
+    const s = sweepSheet(ghost, 'gm_id_in', table, 5, undefined, REFS, {
+      range: 'checked',
+      windows: true,
+    });
     expect(s.feasible).toEqual([true, true, true, true, true]);
     expect(s.verdicts).toEqual(Array(5).fill('undetermined'));
     expect(s.windows).toEqual([]);
-    const plain = sweepSheet(soft(ota), 'gm_id_in', table, 5, undefined, REFS, { windows: true });
+    const plain = sweepSheet(soft(ota), 'gm_id_in', table, 5, undefined, REFS, {
+      range: 'checked',
+      windows: true,
+    });
     expect(plain.verdicts).toEqual(Array(5).fill('feasible'));
     expect(plain.windows).toHaveLength(1);
   });
@@ -199,14 +209,16 @@ group('a range end', () => {
       expect(e.state).toBe('complies');
       expect(e.verdict?.verdict).toBe('undetermined');
     }
-    const s = sweepSheet(ghost, 'gm_id_in', table, 3, undefined, REFS);
+    const s = sweepSheet(ghost, 'gm_id_in', table, 3, undefined, REFS, { range: 'checked' });
     // An undetermined end charts a gap, and a non-compliant one a negative margin: none charts the
     // room a compliant end would have.
     const ends = s.checks.filter((c) => c.rangeEnd !== undefined);
     expect(ends.flatMap((c) => c.marginPct).filter((m) => m !== null && m >= 0)).toEqual([]);
     expect(ends.flatMap((c) => c.marginPct).filter((m) => m === null).length).toBeGreaterThan(0);
     // Without the equation, the same ends chart a margin.
-    const plain = sweepSheet(soft(ota), 'gm_id_in', table, 3, undefined, REFS);
+    const plain = sweepSheet(soft(ota), 'gm_id_in', table, 3, undefined, REFS, {
+      range: 'checked',
+    });
     for (const c of plain.checks.filter((x) => x.rangeEnd !== undefined))
       expect(c.marginPct.every((m) => typeof m === 'number')).toBe(true);
   });
@@ -267,7 +279,7 @@ group('a requirement that cannot be evaluated', () => {
   it('beside one that fails, reads non-compliant: the failing one is charted, it leaves a gap', () => {
     const res = runSheet(na, table, undefined, REFS);
     expect(res.verdict?.verdict).toBe('non-compliant');
-    const s = sweepSheet(na, 'gm_id_in', table, 3, undefined, REFS);
+    const s = sweepSheet(na, 'gm_id_in', table, 3, undefined, REFS, { range: 'checked' });
     const curve = (id: string) => s.checks.find((c) => c.id === id)?.marginPct;
     expect(curve('reads-nothing')).toEqual([null, null, null]);
     expect(curve('offset-spec')?.every((m) => typeof m === 'number')).toBe(true);
@@ -308,6 +320,7 @@ group('a validation error on a requirement’s own entry only', () => {
       'The sheet does not validate, so it has no formulas to read.',
     );
     const s = sweepSheet(soft(badTolerance), 'gm_id_in', table, 3, undefined, REFS, {
+      range: 'checked',
       windows: true,
     });
     expect(s.feasible).toEqual([false, false, false]);
@@ -317,14 +330,12 @@ group('a validation error on a requirement’s own entry only', () => {
 
 group('each sample of a sweep', () => {
   it('says whether its numbers are all there, beside today’s flag', () => {
-    const s = sweepSheet(ghost, 'gm_id_in', table, 3, undefined, REFS);
+    const s = sweepSheet(ghost, 'gm_id_in', table, 3, undefined, REFS, { range: 'checked' });
     expect(s.stands).toEqual([true, true, true]);
     expect(s.complete).toEqual([false, false, false]);
-    expect(sweepSheet(soft(ota), 'gm_id_in', table, 3, undefined, REFS).complete).toEqual([
-      true,
-      true,
-      true,
-    ]);
+    expect(
+      sweepSheet(soft(ota), 'gm_id_in', table, 3, undefined, REFS, { range: 'checked' }).complete,
+    ).toEqual([true, true, true]);
   });
 
   // A one-param sheet whose sampler is the test's: the verdict and the items are what it says.

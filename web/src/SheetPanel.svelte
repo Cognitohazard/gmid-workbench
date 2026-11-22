@@ -20,6 +20,7 @@
     limitingCheck,
     rangeEndCheck,
     rangeEndNames,
+    rangePoints,
     namingRangeEnds,
     worstPointByCheck,
     RANGE_END_SEP,
@@ -693,7 +694,7 @@
   });
   /** Whether the sheet claims an operating range at all — read from the doc, so the range
    *  column is there even when no condition could be evaluated. */
-  const hasRange = $derived((rr.doc.operatingRange ?? []).length > 0);
+  const hasRange = $derived(rangePoints(rr.doc).length > 0);
   /** Compliance is a question only once there is more than one point to ask it at: several
    *  conditions, or a declared operating range. A lone centre is feasibility under another name. */
   const hasCompliance = $derived(agg.compliance.total > 1);
@@ -737,7 +738,7 @@
       ? 'off its limit over every point measured'
       : 'over every point measured',
   );
-  /** A check id as shown: one qualified by a range end (`cm-lo@sr-spec`) names the end. */
+  /** A check id as shown: one qualified by a range end (`CM_dc=lo@sr-spec`) names the end. */
   const checkIdText = (id: string): string => {
     const at = id.indexOf(RANGE_END_SEP);
     return at < 0 ? id : `${id.slice(at + RANGE_END_SEP.length)} at ${endName(id.slice(0, at))}`;
@@ -1584,7 +1585,22 @@
     if (e.verdict.verdict === 'compliant') return [];
     return reasonOf(e.verdict, e.items);
   };
-  const rangeEndNote = $derived(new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note])));
+  /** Each point's authored note: a named end's own, or at a corner the notes of the axes it sits on. */
+  const rangeEndNote = $derived.by(() => {
+    const ends = new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note]));
+    const axisNote = new Map((cfg.operatingAxes ?? []).map((a) => [a.param, a.note]));
+    return new Map(
+      rangePoints(cfg).map((pt) => [
+        pt.name,
+        pt.corner
+          ? pt.corner
+              .map((c) => axisNote.get(c.param))
+              .filter(Boolean)
+              .join(' · ') || undefined
+          : ends.get(pt.name),
+      ]),
+    );
+  });
   /** The run's own non-info diagnostics — a device read beyond its table is not sized there, and
    *  the chip must show why the point has no answer. */
   const rangeEndWarns = (e: RangeEndReport): QAWarning[] =>
@@ -2834,10 +2850,10 @@
           {#if swept.design === 'held'}
             the nominal design held there: each sample sizes the design at {condLabel(swept.base)} with
             {active} at that value and holds it at {at} — widths, lengths, currents and gate biases fixed
-            — so the curves are that design’s margins at {at}{#if (cfg.operatingRange ?? []).length},
-              its own range ends included{/if}.
+            — so the curves are that design’s margins at {at}{#if rangePoints(cfg).length}, its own
+              range ends included{/if}.
           {:else}
-            sized there: each sample re-sizes the design at {at} with {active} at that value{#if (cfg.operatingRange ?? []).length}
+            sized there: each sample re-sizes the design at {at} with {active} at that value{#if rangePoints(cfg).length}
               · each sample holds its OWN design at the range ends, so the range-end curves move
               with the sweep and never change the sheet's verdict{/if}.
           {/if}

@@ -78,10 +78,10 @@ describe('rangeEndNames', () => {
     const five = sheet('otas/five-transistor-ota.json');
     const res = runSheet(five, table, undefined, REFS);
     const names = rangeEndNames(five, res.rangeEnds);
-    expect(names.get('cm-lo')).toMatch(/^CM_dc = .+ V, the low end of the claimed CM_dc range$/);
-    expect(names.get('cm-hi')).toMatch(/^CM_dc = .+ V, the high end of the claimed CM_dc range$/);
-    expect(namingRangeEnds('range end "cm-hi" moves it; range end "other" too', names)).toBe(
-      `range end "cm-hi" (${names.get('cm-hi')}) moves it; range end "other" too`,
+    expect(names.get('CM_dc=lo')).toMatch(/^CM_dc = .+ V, the low end of the CM_dc axis$/);
+    expect(names.get('CM_dc=hi')).toMatch(/^CM_dc = .+ V, the high end of the CM_dc axis$/);
+    expect(namingRangeEnds('range end "CM_dc=hi" moves it; range end "other" too', names)).toBe(
+      `range end "CM_dc=hi" (${names.get('CM_dc=hi')}) moves it; range end "other" too`,
     );
   });
 });

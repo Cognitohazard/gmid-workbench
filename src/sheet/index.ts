@@ -15,6 +15,8 @@ import {
   withValidation,
   treeCheckResults,
   withoutRange,
+  rangePoints,
+  AXES_LOCATION,
   withParams,
 } from './types';
 export { sweepable } from './types';
@@ -123,6 +125,10 @@ export interface SweepOptions extends RunOptions {
    *  few more evaluations per edge, so asked for by a caller that shows the answer, and left off
    *  by one that scans many knobs. */
   readonly windows?: boolean;
+  /** Whether each sample is also asked at every point of the operating range (rangePoints), its
+   *  window then reading them all. Not checked by default: each sample is the design point alone
+   *  (SheetSweep.range). */
+  readonly range?: SheetSweep['range'];
 }
 
 /** What a two-parameter sweep takes besides a run's options. */
@@ -130,6 +136,9 @@ export interface Sweep2Options extends RunOptions {
   /** One named result of the sheet (namedResults) to keep at every cell (SheetSweep2.value). One
    *  only: the map holds n² cells, and a result kept for each would hold n² values per result. */
   readonly value?: string;
+  /** Whether each cell is also asked at every point of the operating range (SheetSweep2.range,
+   *  SheetSweep2.rangeEnds). Not checked by default: the map is the design point's. */
+  readonly range?: SheetSweep2['range'];
 }
 
 /** A result with no values: what the names a sheet always has (its equations and solved values)
@@ -199,11 +208,16 @@ export function runSheet(
   const bound = inheritedPolarityWarnings(r.doc, table, resolveDevice);
   // What validation found is on the items too, each on the entry it names: a finding about one
   // range end on the sheet item of that end's own list, which an end that was not run has too.
-  const endNames = new Set(
-    (Array.isArray(r.doc.operatingRange) ? r.doc.operatingRange : []).map((e) => e?.name),
-  );
+  // A finding about the operating axes is about every corner they span.
+  const points = rangePoints(r.doc);
+  const endNames = new Set(points.map((e) => e.name));
+  const corners = new Set(points.filter((e) => e.corner).map((e) => e.name));
   const onEnd = (w: QAWarning): boolean =>
-    w.rule === 'sheet-range' && w.location !== undefined && endNames.has(w.location);
+    w.rule === 'sheet-range' &&
+    w.location !== undefined &&
+    (endNames.has(w.location) || w.location === AXES_LOCATION);
+  const ownedBy = (w: QAWarning, name: string): boolean =>
+    w.location === name || (w.location === AXES_LOCATION && corners.has(name));
   // A finding about one range end is on that end's list alone; the sheet's verdict reads the ends'
   // lists (sheetVerdictOf), so it is not feasible while the end's entry is not well formed.
   const items = withFindings(
@@ -220,7 +234,7 @@ export function runSheet(
   const entries = errors.filter((w) => !aboutTheSheet(r.doc, w));
   const wholeSheet = errors.length > entries.length;
   const rangeEnds = res.rangeEnds?.map((e) => {
-    const own = pre.filter((w) => w.severity === 'error' && onEnd(w) && w.location === e.name);
+    const own = pre.filter((w) => w.severity === 'error' && onEnd(w) && ownedBy(w, e.name));
     const notRun = !e.items?.length || isNotCalculated(e.items) || wholeSheet || own.length > 0;
     if (!notRun && !own.length && !entries.length) return e;
     const list = withFindings(
@@ -456,12 +470,14 @@ export function sweepOf(
   refs: SheetRefIndex | undefined,
   sample: (doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample,
   probe?: (doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample,
+  range: SheetSweep['range'] = 'checked',
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
     return {
       param,
       unit: v?.unit ?? '',
+      range,
       x: [],
       checks: [],
       feasible: [],
@@ -498,13 +514,8 @@ export function sweepOf(
   // Each range end rides the sweep as ONE aggregate curve: the held design's worst hard-check
   // margin there, per sample — where along this knob the design stops complying at that end. It
   // is a compliance curve and never moves `feasible`. Held in a parallel array
-  // (res.rangeEnds mirrors doc.operatingRange by index), so the sample loop needs no id matching.
-  // Array.isArray, not truthiness, for the reason evaluateSheet's operatingRange guard gives
-  // (eval.ts) — a malformed persisted doc must degrade to a sweep with no compliance curves, not
-  // throw out of .map.
-  const rangeEndChecks: SheetSweepCheck[] = (
-    Array.isArray(r.doc.operatingRange) ? r.doc.operatingRange : []
-  ).map((e) => ({
+  // (res.rangeEnds mirrors rangePoints by index), so the sample loop needs no id matching.
+  const rangeEndChecks: SheetSweepCheck[] = rangePoints(r.doc).map((e) => ({
     id: e.name + RANGE_END_SEP,
     kind: 'spec',
     marginPct: [],
@@ -573,6 +584,7 @@ export function sweepOf(
   const out: SheetSweep = {
     param,
     unit: v.unit ?? '',
+    range,
     x,
     checks: [...checks, ...rangeEndChecks],
     feasible,
@@ -665,6 +677,10 @@ export function sweepSheet(
   refs?: SheetRefIndex,
   opts: SweepOptions = {},
 ): SheetSweep {
+  // Not checked, the sweep never sees the operating range: each sample, its window and its
+  // validation are the design point's alone.
+  const range = opts.range ?? 'not-checked';
+  const swept = range === 'checked' ? doc : withoutRange(doc);
   const sample = (d: SheetDoc, findings: readonly QAWarning[]): SweepSample => {
     const res = evaluateSheet(d, table, resolveDevice, { settings: opts.settings });
     const items = sampleItems(res, findings, d);
@@ -676,15 +692,8 @@ export function sweepSheet(
       complete: isComplete({ items }),
     };
   };
-  // Feasibility never reads a range end, so an edge is pinned without them: one evaluation a probe.
-  return sweepOf(
-    doc,
-    param,
-    n,
-    refs,
-    sample,
-    opts.windows ? (d, findings) => sample(withoutRange(d), findings) : undefined,
-  );
+  // A window is where a sample passes, so its edge is probed at the same points the sample is.
+  return sweepOf(swept, param, n, refs, sample, opts.windows ? sample : undefined, range);
 }
 
 /** Default per-axis sample count for a 2-D sweep (samples² evaluations per call). */
@@ -700,8 +709,9 @@ export const SWEEP2_POINTS = 21;
  * probes each, every probe a full tree evaluation) AND lands on biases the slice cache has not
  * seen. Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~50-60
  * ms/cell once a design constraint and both declared bias axes are in play, i.e. ~21-27 s for the
- * default 21x21. The map is a FEASIBILITY map, so the sheet's operating range is never evaluated
- * here: a range end is a compliance question and cannot move a cell. This runs synchronously; a
+ * default 21x21. By default the map is the design point's and the sheet's operating range is not
+ * evaluated; asked to check it (Sweep2Options.range), each cell is also asked at every point of the
+ * range, which multiplies the cost by their count. This runs synchronously; a
  * caller driving it from a UI should expect to block for that long. Each declared axis costs
  * another slice per pass, so the cheap figure is cheap
  * only because a frozen estimate re-slices at the same handful of biases; the honest
@@ -732,6 +742,7 @@ export function sweepSheet2(
     paramY,
     unitX: px?.unit ?? '',
     unitY: py?.unit ?? '',
+    range: opts.range ?? 'not-checked',
     x: [],
     y: [],
     feasible: [],
@@ -743,7 +754,8 @@ export function sweepSheet2(
 
   const pts = Math.max(2, Math.min(101, Math.floor(n)));
   const r = resolvedSheet(doc, refs); // once — constant tree, only the two params move
-  const swept = withoutRange(r.doc);
+  const checked = empty.range === 'checked';
+  const swept = checked ? r.doc : withoutRange(r.doc);
   const overrideTwo = (vx: number, vy: number): SheetDoc =>
     withParams(swept, { [paramX]: vx, [paramY]: vy });
   // Validated WITH its range: the map does not evaluate the range ends, but a sheet whose range
@@ -763,6 +775,7 @@ export function sweepSheet2(
   const beyond: OutsideTable[][][] = [];
   const asked = opts.value;
   const z: (number | null)[][] = [];
+  const ends: RangeEndReport[][][] = [];
   /** The asked name's entry among a cell's named results, from the first cell that names it. */
   let named: { name: string; unit?: string } | undefined;
 
@@ -772,6 +785,7 @@ export function sweepSheet2(
     const brow: (string | null)[] = [];
     const orow: OutsideTable[][] = [];
     const zrow: (number | null)[] = [];
+    const erow: RangeEndReport[][] = [];
     for (let xi = 0; xi < pts; xi++) {
       const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice, {
         settings: opts.settings,
@@ -785,6 +799,7 @@ export function sweepSheet2(
       // structural error), which bindingCheck reports as "no check to name".
       brow.push(verdict === 'feasible' ? null : (bindingCheck(res)?.id ?? null));
       orow.push(outsideIn(res));
+      if (checked) erow.push(res.rangeEnds ?? []);
       if (asked !== undefined) {
         named ??= namedResults(r.doc, res).find((n) => n.name === asked);
         zrow.push(sampleValue(res, asked));
@@ -795,6 +810,7 @@ export function sweepSheet2(
     binding.push(brow);
     beyond.push(orow);
     if (asked !== undefined) z.push(zrow);
+    if (checked) ends.push(erow);
   }
   return {
     ...empty,
@@ -804,6 +820,7 @@ export function sweepSheet2(
     verdicts,
     binding,
     outside: beyond,
+    ...(checked ? { rangeEnds: ends } : {}),
     ...(asked === undefined
       ? {}
       : named

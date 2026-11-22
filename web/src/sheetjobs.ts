@@ -122,11 +122,13 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
           points: job.points,
           settings,
           windows: true,
+          range: 'checked',
         });
       const resolve = projectingResolver(deviceOf, job.at);
       const sweep = sweepSheet(job.doc, job.param, t, job.points, resolve, undefined, {
         settings,
         windows: true,
+        range: 'checked',
       });
       return { ...sweep, key: job.at, base: job.at, design: 'sized' };
     }

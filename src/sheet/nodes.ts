@@ -2780,6 +2780,7 @@ function wiringSignature(
       k === 'title' ||
       k === 'checks' ||
       k === 'operatingRange' ||
+      k === 'operatingAxes' ||
       k === 'analyses'
     )
       return undefined;

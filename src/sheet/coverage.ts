@@ -28,7 +28,14 @@ import {
   PATH_SEP,
   prefixBlockPath,
 } from './types';
-import type { SizingReport, SheetGivens, SheetBlockReport, SheetDoc, SheetBlock } from './types';
+import type {
+  RangeEndReport,
+  SizingReport,
+  SheetGivens,
+  SheetBlockReport,
+  SheetDoc,
+  SheetBlock,
+} from './types';
 
 /** The three quantities a range end holds fixed: the geometry, and a current the author wrote. */
 export const HELD_AT_A_RANGE_END: ReadonlySet<string> = new Set(['W', 'L', 'id']);
@@ -89,17 +96,47 @@ export interface HeldHardware {
  */
 export function withNominalRange(
   held: HeldHardware,
-  base: { rangeEnds?: readonly { set: Record<string, number> }[] },
+  base: { rangeEnds?: readonly Pick<RangeEndReport, 'name' | 'set' | 'corner'>[] },
 ): HeldHardware {
+  if (!base.rangeEnds) return held;
+  const reports = new Map(base.rangeEnds.map((r) => [r.name, r]));
   const ends = held.doc.operatingRange;
-  if (!Array.isArray(ends) || !base.rangeEnds) return held;
-  const operatingRange = ends.map((e, i) => {
-    const at = base.rangeEnds?.[i]?.set ?? {};
-    const keys = Object.keys(e.set ?? {});
-    if (!keys.every((k) => k in at)) return e;
-    return { ...e, set: Object.fromEntries(keys.map((k) => [k, numExpr(at[k])])) };
-  });
-  return { ...held, doc: { ...held.doc, operatingRange } };
+  const operatingRange = Array.isArray(ends)
+    ? ends.map((e) => {
+        const at = reports.get(e.name)?.set ?? {};
+        const keys = Object.keys(e.set ?? {});
+        if (!keys.every((k) => k in at)) return e;
+        return { ...e, set: Object.fromEntries(keys.map((k) => [k, numExpr(at[k])])) };
+      })
+    : ends;
+  // An axis end is fixed where every corner the base run resolved gives it one number; one that
+  // moves with another axis (a high end of VDD - 0.45) is kept as written and reads that axis's
+  // fixed value at each corner.
+  const axes = held.doc.operatingAxes;
+  const operatingAxes = Array.isArray(axes)
+    ? axes.map((a) => {
+        const fixed = (end: 'lo' | 'hi'): string => {
+          const seen = base.rangeEnds?.flatMap(
+            (r) => r.corner?.filter((c) => c.param === a.param && c.end === end) ?? [],
+          );
+          const v = seen?.[0]?.value;
+          return v !== undefined && seen?.every((c) => c.value === v)
+            ? numExpr(v)
+            : end === 'lo'
+              ? a.lo
+              : a.hi;
+        };
+        return { ...a, lo: fixed('lo'), hi: fixed('hi') };
+      })
+    : axes;
+  return {
+    ...held,
+    doc: {
+      ...held.doc,
+      ...(operatingRange ? { operatingRange } : {}),
+      ...(operatingAxes ? { operatingAxes } : {}),
+    },
+  };
 }
 
 /** Why a design sized under assumed voltages is not asked whether it still works anywhere else.

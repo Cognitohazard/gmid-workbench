@@ -76,7 +76,7 @@ import {
   withoutRange,
   validateSheet,
 } from '../sheet';
-import { isHardCheck } from '../sheet/types';
+import { isHardCheck, rangePoints, type CornerKey } from '../sheet/types';
 import {
   hasDesign,
   incompleteOn,
@@ -571,6 +571,9 @@ function valueRef(qualified: string): ItemRef {
 export interface CompliancePoint {
   /** The range end's name. Absent at the centre. */
   readonly rangeEnd?: string;
+  /** At a corner of the operating axes, the end of each axis and its value there, in axis order
+   *  (RangeEndReport.corner). */
+  readonly corner?: CornerKey;
   readonly state: PointState;
   /** Why the point has no check outcomes to read, when it has none: the refusal, the solver's
    *  message, the table's reach. Absent where the point's checks were measured — a point that
@@ -989,13 +992,16 @@ export function sweepAtCondition(
   };
   // An edge is pinned with the sweep's own sample, less the range ends: passing — feasible where
   // the design is sized, complying at the condition's own point where it is held — never reads them.
+  // Not checked (SweepOptions.range), the samples do not read them either.
+  const range = opts.range ?? 'not-checked';
   const sweep = sweepOf(
-    doc,
+    range === 'checked' ? doc : withoutRange(doc),
     param,
     opts.points ?? SWEEP_POINTS,
     refs,
     sample,
     opts.windows ? (d) => sample(withoutRange(d)) : undefined,
+    range,
   );
   return { ...sweep, key, base, design };
 }
@@ -1020,7 +1026,7 @@ function refused(
     state,
     ...(error === undefined ? {} : { error }),
   });
-  const ends = Array.isArray(prepared.doc.operatingRange) ? prepared.doc.operatingRange : [];
+  const ends = rangePoints(prepared.doc);
   const nodes = state === 'no-answer' ? unwalkedReport(prepared.doc) : undefined;
   return {
     state: 'not-evaluated',
@@ -1107,6 +1113,7 @@ function runPrepared(
     centre,
     ...(result.rangeEnds ?? []).map((e): CompliancePoint => ({
       rangeEnd: e.name,
+      ...(e.corner ? { corner: e.corner } : {}),
       state: e.state,
       ...(e.error === undefined ? {} : { error: e.error }),
       ...(e.outside ? { outside: e.outside } : {}),

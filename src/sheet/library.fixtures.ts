@@ -218,3 +218,20 @@ export const hardFailsIn = (r: Pick<SheetResult, 'checks' | 'blocks'>): string[]
 /** The blocks of a sheet that declare saturation, in document order. */
 export const declaredSaturated = (doc: SheetDoc): string[] =>
   (doc.blocks ?? []).filter((u) => u.doc?.givens?.region === 'saturation').map((u) => u.name);
+
+/** A library sheet with its common-mode axis written as the two named range ends it replaces,
+ *  `cm-lo` (CM_dc at CM_lo) and `cm-hi` (CM_dc at CM_hi): the form the tests of named ends
+ *  edit, and the form the axis is checked against. */
+export const namedEnds = (doc: SheetDoc): SheetDoc => {
+  const { operatingAxes, ...rest } = doc;
+  const axis = operatingAxes?.find((a) => a.param === 'CM_dc');
+  if (!axis) return doc;
+  return {
+    ...rest,
+    operatingRange: [
+      { name: 'cm-lo', set: { CM_dc: axis.lo } },
+      { name: 'cm-hi', set: { CM_dc: axis.hi } },
+      ...(rest.operatingRange ?? []),
+    ],
+  };
+};

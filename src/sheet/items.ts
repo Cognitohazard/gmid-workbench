@@ -1143,6 +1143,7 @@ export function unreadValues(doc: SheetDoc | undefined): ReadonlySet<string> {
     doc.elements,
     doc.analyses,
     list(doc.operatingRange).map((e) => e?.set),
+    list(doc.operatingAxes).map((a) => [a?.lo, a?.hi]),
   ];
   for (const text of stringsIn(sources)) for (const n of readsOf(text)) read.add(n);
   // What a read equation reads is read too, as far as the equations go.

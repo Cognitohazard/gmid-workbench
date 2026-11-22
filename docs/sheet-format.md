@@ -97,6 +97,7 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 | `blocks` | array, optional | Child sheets this sheet composes (see [Composition](#composition)). |
 | `provides` | array of string, optional | The names this sheet exposes to a parent. Inert to the engine at the top level, but load-bearing there as the sheet's declared interface (see [Port contracts](#port-contracts)). |
 | `operatingRange` | array, optional | The ends of the range the sheet claims to work across. The design this run produced is held fixed and asked at each one; the outcomes are its compliance, reported beside feasibility and never folded into it (see [The operating range](#the-operating-range-operatingrange)). |
+| `operatingAxes` | array, optional | The givens the claim spans, each from a low end to a high end. Every corner of the box they span is one more point the held design is asked at, ahead of the named ends (see [The operating axes](#the-operating-axes-operatingaxes)). |
 | `formatVersion` | `2`, optional | The document format. Absent: the earlier format, still read, though a sized device in it is refused until it is migrated (see [Every sheet names its wiring](#every-sheet-names-its-wiring)). `2`: the format with a netlist — the keys below (see [Wiring](#wiring-nodes-levels)). |
 | `nodes` | object, list, or `"none"`, optional | The wires the sheet's own device sits on, or `"none"` for a sheet that is not a circuit (see [Wiring](#wiring-nodes-levels)). |
 | `levels` | object, optional | The wires the sheet holds, each at the level an expression gives it (see [Held wires](#held-wires-levels)). |
@@ -1798,6 +1799,42 @@ check ids, range-end names, AND block names may contain neither `@` nor `.` — 
 becomes part of a key in the single map check outcomes share (a range end's check is named
 `cm-lo@sr-spec`), and a name carrying a separator could silently shadow another check's
 result (validation refuses them).
+
+### The operating axes (`operatingAxes`)
+
+A claim over several givens at once — a supply from 1.62 V to 1.98 V and an input common mode up
+to 0.45 V below it — is a box, and its corners are where it is checked. Each axis names one param
+and its two ends:
+
+```json
+"operatingAxes": [
+  { "param": "VDD", "lo": "1.62", "hi": "1.98" },
+  { "param": "CM_dc", "lo": "1.0", "hi": "VDD - 0.45" }
+]
+```
+
+Every corner — each axis at one of its ends, 2ⁿ of them for n axes — is one more range end,
+evaluated exactly as a named one is, on the held design. The corners come first, the first axis
+varying slowest, and then the named ends of `operatingRange` in document order; every reader (the
+result, the sweeps, the coverage tables, the condition runs) lists them in that order. A corner is
+named by the end of each axis it is at, joined by commas (`VDD=lo,CM_dc=hi`); that name is its
+`name` in `rangeEnds`, its `rangeEnd` in a compliance point, and the prefix of its check ids
+(`VDD=lo,CM_dc=hi@sr-spec`). Its report also carries `corner`: each axis's param, its end, and the
+value it took there, in axis order. A named end's name may therefore not contain `=`.
+
+- `lo` and `hi` read only numbers, constants, typed params, and other axes' params. An end that
+  reads another axis takes that axis's value at the same corner, so the axes are set in the order
+  they read each other, document order breaking ties. Two axes that read each other's params, or
+  one that reads its own, have no such order, and validation names both.
+- An axis may not move a param the engine solves or holds, nor one that is not a param.
+- Where an axis's low end lies above its high end at a corner, that corner claims no range and is
+  `no-answer`; the other corners still run.
+- A design value outside its own axis is a warning, not an error: every corner still runs.
+- Any validation error in the axes withholds every corner; the design point keeps its own verdict.
+
+A sweep reports whether its samples were asked at these points (`range`: `checked` or
+`not-checked`); unchecked, each sample is the design point alone. A two-parameter map does the same,
+and checked, each cell carries its own corner results (`rangeEnds`).
 
 **Four outcomes, two of them verdicts.** Each range end reports a `state`:
 
