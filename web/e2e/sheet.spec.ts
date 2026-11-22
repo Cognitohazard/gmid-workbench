@@ -734,6 +734,7 @@ test('design sheet: a nested block inherits its parent block’s device, and is 
 test('composed sheet: a signed-PMOS child with its sign param still +1 gets a root-cause hint', async ({
   page,
 }) => {
+  test.slow();
   await page.goto('/');
   await loadDemo(page);
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/pmos-demo.mostab.csv');

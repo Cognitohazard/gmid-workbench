@@ -36,6 +36,7 @@ import type {
   SearchStep,
   StatementFalseData,
   UnevaluableAt,
+  UnevaluablePoint,
   Verdict,
   WithheldOn,
 } from './states';
@@ -269,7 +270,7 @@ function didNotSettleMessage(d: DidNotSettleData): string {
     return (
       `${what} in ${whole} did not settle: nothing of the range could be ` +
       `evaluated: ${rel} does not evaluate at either end of it or at its middle — ` +
-      `${at.reason}${given}`
+      `${at.points[0]?.reason ?? ''}${given}`
     );
   if (at.where === 'one-point')
     return (
@@ -956,12 +957,26 @@ function didNotSettleText(d: DidNotSettleData): Line[] {
     : [t`A relation of the search gives no number where the engine tried it.`];
 }
 
-/** What stopped the points a search tried: the first item that failed there, in its cause's own
- *  first lines, or by name where the data hold no cause. */
-function stoppedBy(at: { by?: ItemRef; byCause?: Cause }): Line[] {
-  if (!at.by) return [];
-  if (at.byCause) return linesOf(at.byCause, at.by).slice(0, 2).map(upperFirst);
-  return [t`${itemName(at.by)} gives no number there.`];
+/** What stopped the points a search tried: one reason for each item that failed there and its
+ *  cause, in that cause's own first lines, after the values of the unknown it was found at. */
+function stoppedBy(m: SearchData, points: readonly UnevaluablePoint[]): Line[] {
+  const groups = new Map<string, { xs: number[]; lines: Line[] }>();
+  for (const p of points)
+    for (const f of p.failed) {
+      const lines = linesOf(f.cause, f.ref).slice(0, 2);
+      const key = `${f.ref.kind}:${itemName(f.ref)}:${lines.map(lineText).join('\n')}`;
+      const g = groups.get(key) ?? { xs: [], lines };
+      if (!g.xs.includes(p.x)) g.xs.push(p.x);
+      groups.set(key, g);
+    }
+  return [...groups.values()].flatMap(({ xs, lines: [first, ...rest] }) =>
+    first
+      ? [
+          t`At ${unknownName(m)} = ${andLines(xs.map((x) => t`${quantityText(x, m.unit)}`))}, ${lowerFirst(first)}`,
+          ...rest.map(upperFirst),
+        ]
+      : [],
+  );
 }
 
 /** Where a search found its relation giving no number, and what it searched. */
@@ -973,7 +988,7 @@ function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
       t`The engine searched ${unknownName(m)} ${span}.`,
       ...relationLine(m),
       t`${relationName(m)} gives no number at any value that the engine tried.`,
-      ...stoppedBy(at),
+      ...stoppedBy(m, at.points),
     ];
   if (at.where === 'one-point')
     return [
@@ -985,7 +1000,7 @@ function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
     t`${lhs} crosses ${rhs} between ${quantityText(at.between[0], m.unit)} and ${quantityText(at.between[1], m.unit)}.`,
     ...relationLine(m),
     t`${relationName(m)} gives no number at the values that the engine tried there.`,
-    ...stoppedBy(at),
+    ...stoppedBy(m, at.points),
   ];
 }
 
@@ -1493,14 +1508,8 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
   // A search whose relation gives no number where it searched, and what gave none there.
   if (d.unevaluable) {
     const m = d.unevaluable.member;
-    const at = d.unevaluable.at;
-    const lines = unevaluableLines(
-      m,
-      at.where === 'nowhere' && d.outside ? { ...at, by: undefined } : at,
-    );
     return [
-      ...lines,
-      ...(d.outside ? outsideTableText(d.outside).slice(0, 2) : []),
+      ...unevaluableLines(m, d.unevaluable.at),
       ...setLines({ ...m, set: d.unevaluable.set }),
       ...givenLines(m),
     ];
@@ -1755,8 +1764,8 @@ export function withheldClause(r: WithheldOn): Line {
   }
 }
 
-/** The item of the design point's list a pointer of a range end names. */
-const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
+/** The item of the design point's list a pointer names. */
+export const pointedAt = (r: ItemRef, design: readonly Item[]): Item | undefined =>
   design.find(
     (i) =>
       i.kind === r.kind &&
@@ -1765,12 +1774,14 @@ const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
       i.path.every((p, k) => p === r.path[k]),
   );
 
+/** The clause every text that says the design point gives no design to run on is written with:
+ *  a range end not calculated or not run, a held condition not run, and the condition issue. */
+export const noDesignClause = (): Line => t`the design point has no design`;
+
 /** Why a range end is not calculated, from the design point's items its pointers name: the design
- *  point has no design where one of them is not complete (incompleteOn) for a reason other than
- *  the statements; else its statements do not determine one design; else it rests on an assumed
+ *  point has no design (noDesignClause) where one of them failed for a cause other than
+ *  not-determined; else its statements do not determine one design; else it rests on an assumed
  *  level. Undefined where none of these is what the items say. */
-/** Why the engine did not calculate a range end, from the end's own item: the clause its pointers
- *  into the design point's list give ("the design point has no design"). */
 export function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
   const items = on.flatMap((r) => {
     const i = r.frame === 'design' ? pointedAt(r, design) : undefined;
@@ -1783,8 +1794,7 @@ export function designReason(on: readonly WithheldOn[], design: readonly Item[])
     i.status === 'failed' &&
     i.cause.kind === 'not-determined' &&
     i.cause.data.why === 'assumed-level';
-  if (items.some((i) => incompleteOn([i]).length > 0 && !determined(i)))
-    return t`the design point has no design`;
+  if (items.some((i) => i.status === 'failed' && !determined(i))) return noDesignClause();
   if (items.some((i) => determined(i) && !assumed(i)))
     return t`the statements of the sheet do not determine one design`;
   if (items.some(assumed)) return t`the design point rests on an assumed level`;
@@ -1807,7 +1817,7 @@ const lowerFirst = (l: Line): Line => {
  *  assumed level says the value is one; a finding that the statements do not determine one design
  *  gives the sentence after its heading; any other cause, the clause that names what failed. The
  *  details stay on the design point. */
-function designLine(i: Item): Line {
+export function designLine(i: Item): Line {
   const ref = { kind: i.kind, path: i.path, name: i.name };
   if (i.status === 'failed' && i.cause.kind === 'not-determined') {
     if (i.cause.data.why === 'assumed-level')
@@ -1941,8 +1951,8 @@ export function verdictText(v: Verdict<string>, within: readonly string[] = []):
 export const notAskedText = (what: 'range end' | 'held point', name: string): FindingText =>
   finding(NOT_ASKED_NAME, [
     what === 'range end'
-      ? t`The engine did not run range end ${nm(name)}, because the design point has no design.`
-      : t`The engine did not run the condition ${nm(name)}, because the design point has no design.`,
+      ? t`The engine did not run range end ${nm(name)}, because ${noDesignClause()}.`
+      : t`The engine did not run the condition ${nm(name)}, because ${noDesignClause()}.`,
   ]);
 
 /** Why a run is not complete (incompleteOn): the finding of each failed item whose number it does

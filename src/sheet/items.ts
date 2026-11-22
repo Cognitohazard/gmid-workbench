@@ -460,10 +460,8 @@ export const resolveWithheld = (list: readonly Item[]): Item[] => {
  *  item that is itself withheld stays failed, since that item may be waiting on this very search. */
 function onWhatStoppedIt(i: Item, list: readonly Item[]): Item {
   if (i.kind !== 'search' || i.status !== 'failed' || i.cause.kind !== 'cannot-evaluate') return i;
-  const by =
-    i.cause.data.unevaluable?.at.where !== 'one-point'
-      ? i.cause.data.unevaluable?.at.by
-      : undefined;
+  const at = i.cause.data.unevaluable?.at.where;
+  const by = at && at !== 'one-point' ? i.cause.data.by : undefined;
   // A requirement stops nothing from evaluating: a search is never withheld on one.
   if (!by || by.kind === 'requirement') return i;
   const target = list.find(
