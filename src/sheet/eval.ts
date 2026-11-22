@@ -136,6 +136,7 @@ import type {
   SheetBlockReport,
   SheetDoc,
   RangePoint,
+  CornerKey,
   RangeEndReport,
   PointOutcome,
   PointState,
@@ -2328,9 +2329,9 @@ export function evaluateSheet(
     assumed: opts.assumed ?? dcInputs(doc).assumed,
     settings: settingsFrom(opts.settings ?? DEFAULT_SETTINGS),
   };
-  // Array.isArray, not truthiness: evaluate never throws, and a malformed doc (operatingRange as a
-  // string or object — validation's problem) must degrade to a plain evaluation, not a
-  // TypeError out of .map.
+  // rangePoints reads only well-formed lists: evaluate never throws, and a malformed doc
+  // (operatingRange or operatingAxes as a string or object — validation's problem) degrades to a
+  // plain evaluation, not a TypeError.
   return rangePoints(doc).length
     ? evaluateWithRange(doc, table, resolveDevice, asked)
     : evaluateNode(doc, table, resolveDevice, 0, asked);
@@ -4238,6 +4239,12 @@ export const withVerdict = (
   return verdict ? { verdict } : {};
 };
 
+/** A corner's key on its report: each axis end, with the value it took where it gave one. */
+const cornerOf = (point: RangePoint, set: Record<string, number>): CornerKey =>
+  point.corner!.map((c) =>
+    Number.isFinite(set[c.param]) ? { ...c, value: set[c.param] } : { ...c },
+  );
+
 /** A range end's report with nothing evaluated in it: no outcomes, no landing, no warnings, and
  *  whatever `extra` says (an error, the point asked about, the wiring report) over that. */
 const unrunEnd = (
@@ -4246,6 +4253,7 @@ const unrunEnd = (
   extra: Partial<RangeEndReport> = {},
 ): RangeEndReport => ({
   name: point.name,
+  ...(point.corner ? { corner: cornerOf(point, extra.set ?? {}) } : {}),
   state,
   set: {},
   checks: [],
@@ -4445,9 +4453,17 @@ function runRangeEnd(
     // end here claims no range at this corner, and the corner is not asked.
     const axis = rangeEnd.corner ? axes.get(param) : undefined;
     if (axis) {
-      const lo = evalAt(axis.lo);
-      const hi = evalAt(axis.hi);
-      if (lo !== undefined && hi !== undefined && lo > hi) {
+      const atLo = rangeEnd.corner!.some((c) => c.param === param && c.end === 'lo');
+      const other = atLo ? axis.hi : axis.lo;
+      const w = evalAt(other);
+      if (w === undefined)
+        return unanswered(
+          `range end "${rangeEnd.name}": the ${param} axis's ${atLo ? 'high' : 'low'} end "${other}" ` +
+            `did not evaluate to a finite number against the base result`,
+          rangeEndCause(rangeEnd.name, param, other, values),
+        );
+      const [lo, hi] = atLo ? [v, w] : [w, v];
+      if (lo > hi) {
         const message = `the ${param} axis runs from ${lo} down to ${hi} at this corner: its low end lies above its high end`;
         return unanswered(`range end "${rangeEnd.name}": ${message}`, {
           kind: 'not-determined',
@@ -4492,9 +4508,7 @@ function runRangeEnd(
   // result's warning contract stays untouched.
   return {
     name: rangeEnd.name,
-    ...(rangeEnd.corner
-      ? { corner: rangeEnd.corner.map((c) => ({ ...c, value: over[c.param] })) }
-      : {}),
+    ...(rangeEnd.corner ? { corner: cornerOf(rangeEnd, over) } : {}),
     state,
     set: over,
     checks: res.checks,

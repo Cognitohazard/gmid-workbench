@@ -76,7 +76,7 @@ import {
   withoutRange,
   validateSheet,
 } from '../sheet';
-import { isHardCheck, rangePoints, type CornerKey } from '../sheet/types';
+import { isHardCheck, rangePoints, type CornerKey, type RangePoint } from '../sheet/types';
 import {
   hasDesign,
   incompleteOn,
@@ -1021,8 +1021,9 @@ function refused(
     prepared.items && issues.some((i) => i.kind === 'invalid-sheet-or-ref')
       ? prepared.items
       : pointed;
-  const point = (limit?: string): CompliancePoint => ({
-    ...(limit === undefined ? {} : { rangeEnd: limit }),
+  const point = (end?: RangePoint): CompliancePoint => ({
+    ...(end === undefined ? {} : { rangeEnd: end.name }),
+    ...(end?.corner ? { corner: end.corner } : {}),
     state,
     ...(error === undefined ? {} : { error }),
   });
@@ -1033,7 +1034,7 @@ function refused(
     key,
     design,
     issues,
-    points: [point(), ...ends.map((e) => point(e.name))],
+    points: [point(), ...ends.map((e) => point(e))],
     ...(nodes ? { nodes } : {}),
     ...(items ? { items } : {}),
   };

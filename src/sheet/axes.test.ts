@@ -177,6 +177,19 @@ describe('operating axes — the corners of a claimed box, checked on the held d
     expect(notRun(runSheet(doc, dev))).toBe(true);
   });
 
+  it('a cycle through three axes names all three', () => {
+    const doc = mk({
+      operatingAxes: [
+        { param: 'V', lo: 'S + 2', hi: 'V_hi' },
+        { param: 'S', lo: 'x_floor - 0.5', hi: '1' },
+        { param: 'x_floor', lo: 'V - 5', hi: '1.6' },
+      ],
+    });
+    const errs = axisErrors(doc);
+    expect(errs.some((m) => ['"V"', '"S"', '"x_floor"'].every((p) => m.includes(p)))).toBe(true);
+    expect(notRun(runSheet(doc, dev))).toBe(true);
+  });
+
   it('an axis on a param the engine solves is an error', () => {
     const doc = sheet('otas/five-transistor-ota.json');
     doc.operatingAxes = [{ param: 'V_tail', lo: '0.3', hi: '0.5' }];
@@ -203,6 +216,11 @@ describe('operating axes — the corners of a claimed box, checked on the held d
     // The V axis is empty along the whole S = lo row, so both of its corners say so.
     for (const e of res.rangeEnds!.slice(0, 2))
       expect(e.error).toMatch(/low end lies above its high end/);
+    // A corner that has no answer still says which corner it is.
+    expect(res.rangeEnds?.[0].corner?.map((c) => [c.param, c.end])).toEqual([
+      ['S', 'lo'],
+      ['V', 'lo'],
+    ]);
     expect(res.verdict?.verdict).toBe('feasible');
     expect(res.rangeEnds?.[3].solved.x).toBeCloseTo(3.5, 4); // V = 8 → y = 2x + 1 = 8
   });

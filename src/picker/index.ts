@@ -705,8 +705,6 @@ function repair(
       if (!afford(meter, PICKER_SCAN_POINTS)) break;
       const sw = sweepSheet(doc, k.name, table, PICKER_SCAN_POINTS, resolveDevice, refs, {
         settings,
-        // A sample's score reads every check, the range-end curves among them.
-        range: 'checked',
       });
       meter.evals += sw.x.length; // what the sweep actually evaluated, not what it was asked for
       scanned = scanned || sw.x.length > 0;

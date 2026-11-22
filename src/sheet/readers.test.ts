@@ -193,11 +193,19 @@ group('a sweep', () => {
         },
       ],
     });
-    const s = sweepOf(doc, 'k', 3, undefined, (d) => ({
-      res: res(d.params[0].value),
-      feasible: true,
-      stands: true,
-    }));
+    const s = sweepOf(
+      doc,
+      'k',
+      3,
+      undefined,
+      (d) => ({
+        res: res(d.params[0].value),
+        feasible: true,
+        stands: true,
+      }),
+      undefined,
+      'not-checked',
+    );
     expect(s.values.find((c) => c.name === 'y')?.y).toEqual([null, null, null]);
   });
 });
@@ -378,6 +386,7 @@ group('each sample of a sweep', () => {
         complete: (i++, true),
       }),
       () => ({ feasible: false, stands: true, verdict: 'non-compliant', complete: true }),
+      'not-checked',
     );
     expect(s.verdicts).toEqual(['compliant', null, 'non-compliant']);
     // The middle sample has no verdict and is read by its flag, as today.
@@ -423,11 +432,19 @@ group('each sample of a sweep', () => {
     };
     expect(marginReadable(end.items[1])).toBe(true);
     expect(marginReadable(end.items[2])).toBe(false);
-    const s = sweepOf(doc, 'k', 2, undefined, () => ({
-      res: { values: {}, checks: [], feasible: true, warnings: [], items: [], rangeEnds: [end] },
-      feasible: true,
-      stands: true,
-    }));
+    const s = sweepOf(
+      doc,
+      'k',
+      2,
+      undefined,
+      () => ({
+        res: { values: {}, checks: [], feasible: true, warnings: [], items: [], rangeEnds: [end] },
+        feasible: true,
+        stands: true,
+      }),
+      undefined,
+      'checked',
+    );
     expect(s.checks.find((c) => c.rangeEnd === 'hi')?.marginPct).toEqual([-0.5, -0.5]);
   });
 });

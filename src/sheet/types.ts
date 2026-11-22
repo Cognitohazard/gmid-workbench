@@ -950,7 +950,7 @@ export interface RangePoint {
 }
 
 /** Which end of each axis a corner is at, with the value it took there, in axis order. */
-export type CornerKey = readonly { param: string; end: 'lo' | 'hi'; value: number }[];
+export type CornerKey = readonly { param: string; end: 'lo' | 'hi'; value?: number }[];
 
 /** Separator between one axis's end and the next in a corner's name (`VDD=lo,CM_dc=hi`). */
 export const CORNER_SEP = ',';
@@ -966,12 +966,12 @@ const axesOf = (doc: Pick<SheetDoc, 'operatingAxes'>): SheetAxis[] =>
 
 /**
  * The axes in the order their ends can be evaluated: an axis after every axis whose param its `lo`
- * or `hi` reads, document order breaking ties. `cycle` names two axes that read each other, directly
- * or through others, where there is no such order; `order` is then document order.
+ * or `hi` reads, document order breaking ties. `cycle` names the axes, in reading order, that read
+ * each other round a loop where there is no such order; `order` is then document order.
  */
 export function axisOrder(doc: Pick<SheetDoc, 'operatingAxes'>): {
   order: SheetAxis[];
-  cycle?: [string, string];
+  cycle?: string[];
 } {
   const axes = axesOf(doc);
   const params = new Set(axes.map((a) => a.param));
@@ -994,17 +994,17 @@ export function axisOrder(doc: Pick<SheetDoc, 'operatingAxes'>): {
   if (order.length === axes.length) {
     // An axis whose ends read its own param is a cycle of one.
     const self = axes.find((a) => [...namesOf(a.lo), ...namesOf(a.hi)].includes(a.param));
-    return self ? { order: axes, cycle: [self.param, self.param] } : { order };
+    return self ? { order: axes, cycle: [self.param] } : { order };
   }
-  // Walk the reads from an unplaced axis until a name repeats: that name and the one that read it
-  // close the cycle.
+  // Walk the reads from an unplaced axis until a name repeats: the walk from that name's first visit
+  // is the cycle.
   const seen: string[] = [];
   let at = axes.find((a) => !placed.has(a.param))!.param;
   while (!seen.includes(at)) {
     seen.push(at);
     at = [...(reads.get(at) ?? [])].find((n) => !placed.has(n))!;
   }
-  return { order: axes, cycle: [seen[seen.length - 1], at] };
+  return { order: axes, cycle: seen.slice(seen.indexOf(at)) };
 }
 
 /**

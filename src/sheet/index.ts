@@ -469,8 +469,8 @@ export function sweepOf(
   n: number,
   refs: SheetRefIndex | undefined,
   sample: (doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample,
-  probe?: (doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample,
-  range: SheetSweep['range'] = 'checked',
+  probe: ((doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample) | undefined,
+  range: SheetSweep['range'],
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
@@ -692,8 +692,16 @@ export function sweepSheet(
       complete: isComplete({ items }),
     };
   };
-  // A window is where a sample passes, so its edge is probed at the same points the sample is.
-  return sweepOf(swept, param, n, refs, sample, opts.windows ? sample : undefined, range);
+  // Feasibility never reads a range end, so an edge is pinned without them: one evaluation a probe.
+  return sweepOf(
+    swept,
+    param,
+    n,
+    refs,
+    sample,
+    opts.windows ? (d, findings) => sample(withoutRange(d), findings) : undefined,
+    range,
+  );
 }
 
 /** Default per-axis sample count for a 2-D sweep (samples² evaluations per call). */

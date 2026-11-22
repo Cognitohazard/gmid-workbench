@@ -2348,9 +2348,9 @@ function axisProblems(doc: SheetDoc): QAWarning[] {
   const { cycle } = axisOrder(doc);
   if (cycle) {
     error(
-      cycle[0] === cycle[1]
+      cycle.length === 1
         ? `the operating axis "${cycle[0]}" reads its own param at an end — type its ends`
-        : `the operating axes "${cycle[0]}" and "${cycle[1]}" read each other's params at their ends — ` +
+        : `the operating axes ${quoted(cycle)} read each other's params at their ends — ` +
             `there is no order to set them in`,
     );
     return out;
