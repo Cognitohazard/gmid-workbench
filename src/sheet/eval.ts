@@ -78,6 +78,7 @@ import {
 } from './validate';
 import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
+  hasDesign,
   noSolutionCause,
   type Cause,
   type HeldVerdict,
@@ -88,6 +89,7 @@ import {
   type SearchData,
   type SearchEnd,
   type UnevaluableAt,
+  type UnevaluablePoint,
   type WithheldOn,
   withSet,
 } from './states';
@@ -2621,7 +2623,12 @@ function unevaluableCause(
   reason: string,
   outside: OutsideTable | undefined,
 ): Cause {
-  const by = 'by' in at ? at.by : undefined;
+  // What stopped it, for a reader of the cause alone: the part read beyond its table where there
+  // was one, else the first item that failed at the low end (nowhere) or at the last point on
+  // the first side of the crossing that gave no number.
+  const lead =
+    at.where === 'nowhere' ? at.points[0] : at.where === 'crossing' ? at.points[1] : undefined;
+  const by = outside ? deviceRef(outside.device) : lead?.failed[0]?.ref;
   return {
     kind: 'cannot-evaluate',
     data: {
@@ -3568,29 +3575,24 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
   };
 }
 
-/** The first item that failed in one evaluation of the node, with its cause: what a point that
- *  does not evaluate was stopped by. A requirement that fails and a statement that is false stop
- *  nothing from evaluating, so neither is it. */
-function failedAt(doc: SheetDoc, res: SheetResult): { ref: ItemRef; cause: Cause } | undefined {
-  const first = withFindings(itemsOf(doc, res), res.warnings, doc, 'evaluation').find(
-    (i) => i.status === 'failed' && i.cause.kind !== 'fails' && i.cause.kind !== 'statement-false',
+/** Every item that failed in one evaluation of the node, with its cause: what a point that does
+ *  not evaluate was stopped by. A device read beyond its table is one, as `outside-table`. A
+ *  requirement that fails and a statement that is false stop nothing from evaluating, so neither
+ *  is one. */
+function failedAt(doc: SheetDoc, res: SheetResult): { ref: ItemRef; cause: Cause }[] {
+  return withFindings(itemsOf(doc, res), res.warnings, doc, 'evaluation').flatMap((i) =>
+    i.status === 'failed' && i.cause.kind !== 'fails' && i.cause.kind !== 'statement-false'
+      ? [{ ref: { kind: i.kind, path: i.path, name: i.name }, cause: i.cause }]
+      : [],
   );
-  return first?.status === 'failed'
-    ? { ref: { kind: first.kind, path: first.path, name: first.name }, cause: first.cause }
-    : undefined;
 }
 
-/** What stopped a point from evaluating, as UnevaluableAt holds it: the part read beyond its
- *  table, where one was, else the first item that failed there, with its cause. */
-function byAt(
-  doc: SheetDoc,
-  res: SheetResult,
-  outside: OutsideTable | undefined,
-): { by?: ItemRef; byCause?: Cause } {
-  if (outside) return { by: deviceRef(outside.device) };
-  const failed = failedAt(doc, res);
-  return failed ? { by: failed.ref, byCause: failed.cause } : {};
-}
+/** A point a search tried that gave no number, as UnevaluableAt holds it. */
+const unevaluablePoint = (doc: SheetDoc, p: Probe): UnevaluablePoint => ({
+  x: p.x,
+  reason: p.why ?? '',
+  failed: failedAt(doc, p.res),
+});
 
 /** The two ends a search brackets between: the ends of the stated range, each stepped inward to
  *  the nearest point that evaluates where the relation does not evaluate there, with what each
@@ -3613,7 +3615,7 @@ function ends(
   const stepOf = (why: string, bad: Probe): Step => {
     const outside = outsideIn(bad.res)[0];
     if (outside) return { reason: why, outside };
-    const failed = failedAt(s.doc, bad.res);
+    const [failed] = failedAt(s.doc, bad.res);
     return { reason: why, ...(failed ? { failed } : {}) };
   };
   if (lo.g === undefined || hi.g === undefined) {
@@ -3628,11 +3630,7 @@ function ends(
         return s.fail(
           unevaluableCause(
             s.data(),
-            {
-              where: 'nowhere',
-              reason: lo.why as string,
-              ...byAt(s.doc, lo.res, outside),
-            },
+            { where: 'nowhere', points: [lo, mid, hi].map((p) => unevaluablePoint(s.doc, p)) },
             lo.why as string,
             outside,
           ),
@@ -3819,7 +3817,7 @@ function stepAround(
         ends: stretch,
         between: [Math.min(pb.x, pc.x), Math.max(pb.x, pc.x)],
         reason: nearB.why,
-        ...byAt(s.doc, nearB.bad.res, outside),
+        points: [next, nearB.bad, nearC.bad].map((p) => unevaluablePoint(s.doc, p)),
       },
       nearB.why,
       outside,
@@ -4171,12 +4169,18 @@ function solveNode(node: NodeRef): SheetResult {
  *
  * Two questions, answered apart. `feasible` is the base run's own verdict and nothing here
  * touches it. `complies` is whether that design, HELD FIXED (see coverage.ts), still works at
- * every range end — conditional on there being a design at all. When the base run did not stand,
- * every end comes back `not-run` rather than carrying a verdict about hardware the engine never
- * landed on — a failed solve withholds what it did not find (withUnfound), and "the devices that
- * do not read it sized" is nowhere near enough to have produced an instance.
- * Check FAILURES do not gate: a center that misses its spec is still a design, and whether it holds
- * across its claimed range is still a real question.
+ * every range end — conditional on there being a design at all. Where the base run sizes the
+ * design, it has one when every device, search and sheet item is ok (hasDesign); where it does
+ * not, every end comes back `not-run` rather than carrying a verdict about hardware the engine
+ * never landed on — a failed solve withholds what it did not find (withUnfound), and "the devices
+ * that do not read it sized" is nowhere near enough to have produced an instance. A value that
+ * gives no number and a check that fails do not gate: a centre that misses its spec is still a
+ * design, and whether it holds across its claimed range is still a real question.
+ *
+ * A held run (`opts.held`) is given hardware that is already held, so each end evaluates that
+ * document as it is: no second hold, and no gate, as a held centre that is not complete says
+ * nothing about the hardware the ends run on. A search held at a given value (`opts.pinned`) is
+ * held at every end too, and marked so on each end's list.
  */
 function evaluateWithRange(
   doc: SheetDoc,
@@ -4186,11 +4190,8 @@ function evaluateWithRange(
 ): SheetResult {
   const base = evaluateNode(doc, table, resolveDevice, 0, opts);
   const rangeEnds = doc.operatingRange ?? [];
-  if (!stands(base)) {
-    // No `set`: the overrides resolve against the base VALUES, which here hold no design — what a
-    // failed solve did not find is withheld from them, and what is left was never landed on as a
-    // design. Reporting the point that would have been asked about from those is reporting a
-    // phantom, the same reason a failed solve's probe is never reported as a landing.
+  if (opts.held !== true && !hasDesign(base.items ?? [])) {
+    // No `set`: no end is asked about hardware the base run did not land on.
     const items = notCalculated(base.items ?? []);
     return { ...base, rangeEnds: rangeEnds.map((e) => unrunEnd(e.name, 'not-run', { items })) };
   }
@@ -4207,9 +4208,12 @@ function evaluateWithRange(
     );
     return { ...base, rangeEnds: reports, complies: false };
   }
-  const held = holdHardware(doc, base);
+  const held: HeldHardware =
+    opts.held === true ? { doc, assumedSource: [], unheld: [] } : holdHardware(doc, base);
   const settings = opts.settings ?? DEFAULT_SETTINGS;
-  const reports = rangeEnds.map((e) => runRangeEnd(e, held, base, table, resolveDevice, settings));
+  const reports = rangeEnds.map((e) =>
+    runRangeEnd(e, held, base, table, resolveDevice, settings, opts.pinned),
+  );
   return {
     ...base,
     rangeEnds: reports,
@@ -4383,6 +4387,7 @@ function runRangeEnd(
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   settings: Settings,
+  pinned: EvaluateOptions['pinned'],
 ): RangeEndReport {
   // Copied per report rather than shared: the transformation allocates one list for the whole
   // document, and a consumer that sorted or de-duplicated one report's copy in place would be
@@ -4434,6 +4439,7 @@ function runRangeEnd(
   const res = evaluateNode(withParams(held.doc, over), table, resolveDevice, 0, {
     held: true,
     settings,
+    ...(pinned ? { pinned } : {}),
   });
   const { state, error: err } = res.point as PointOutcome;
   const outside = outsideIn(res);

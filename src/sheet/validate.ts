@@ -9,6 +9,7 @@
 
 import type { LevelRefusal, QAWarning } from '../types';
 import { compileExpr } from '../derive';
+import { CONSTANTS } from '../constants';
 import { createEngine } from '../expr';
 import { BINDABLE, bindProblem } from '../device';
 import { PER_WIDTH_KEYS, TABLE_AFFIX, affixedColumn } from '../namespace';
@@ -2155,6 +2156,31 @@ function checkProblems(doc: SheetDoc): QAWarning[] {
   return out;
 }
 
+/**
+ * The names a range end's set expression reads that a corner may not be defined by. A corner is
+ * defined by numbers the designer gives: the expression may read numbers, constants, and params of
+ * the same sheet whose typed value the engine does not solve, constrain or hold. Anything else (an
+ * equation, a value a block provides, a device quantity, a solved or held param, a name the sheet
+ * does not have) is returned, in the order the expression reads it. `alsoAllowed` admits further
+ * names, for a caller whose ends may also read them. Empty for an expression that does not parse.
+ */
+export function setReads(
+  doc: SheetDoc,
+  expr: unknown,
+  alsoAllowed: ReadonlySet<string> = new Set(),
+): string[] {
+  if (typeof expr !== 'string' || !parses(expr)) return [];
+  const params = new Map(doc.params.map((p) => [p.name, p]));
+  // An equation may take a constant's name, and the sheet then reads its own value.
+  const equations = new Set(doc.equations.map((e) => e.name));
+  return ALL_NAMES.compile(expr).names.filter((n) => {
+    if (alsoAllowed.has(n)) return false;
+    const p = params.get(n);
+    if (p) return engineSolved(p) || holds(p);
+    return equations.has(n) || !Object.hasOwn(CONSTANTS, n);
+  });
+}
+
 /** The operating range's problems: each range end's shape, then what it reaches (see
  *  complianceReach). */
 function rangeProblems(doc: SheetDoc): QAWarning[] {
@@ -2230,6 +2256,18 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
             message: `range end "${name}": the expression for "${k}" does not parse`,
             location: name,
             about: { kind: 'entry', field: 'set', key: k, value: expr, problem: 'syntax' },
+          });
+        }
+        const read = setReads(doc, expr);
+        if (read.length) {
+          out.push({
+            rule: 'sheet-range',
+            severity: 'error',
+            message:
+              `range end "${name}" sets "${k}" from ${quoted(read)}, which ` +
+              `${read.length > 1 ? 'are' : 'is'} not a typed value — a range end is defined by ` +
+              `numbers the designer gives: type the value`,
+            location: name,
           });
         }
       }

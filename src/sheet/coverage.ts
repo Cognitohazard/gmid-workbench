@@ -82,10 +82,10 @@ export interface HeldHardware {
 /**
  * A held design with its claimed operating range fixed at the numbers the base run resolved it
  * to. The range describes the APPLICATION — the input levels and loads the circuit is promised
- * to work across — which does not move with the silicon, so an end written as an expression
- * (`V_out - 0.2`) is the same voltage at every process condition, not re-read from each
- * condition's own operating point. An end the base run could not resolve keeps its expression
- * and fails to resolve the same way everywhere.
+ * to work across — which does not move with the silicon. An end's set reads only numbers,
+ * constants and typed params (validation's `sheet-range` rule), so every set is a number here. An
+ * end the base run gave no number for (a literal that is not finite) is kept as written and fails
+ * the same way everywhere.
  */
 export function withNominalRange(
   held: HeldHardware,
@@ -95,10 +95,9 @@ export function withNominalRange(
   if (!Array.isArray(ends) || !base.rangeEnds) return held;
   const operatingRange = ends.map((e, i) => {
     const at = base.rangeEnds?.[i]?.set ?? {};
-    const set = Object.fromEntries(
-      Object.entries(e.set ?? {}).map(([k, expr]) => [k, k in at ? numExpr(at[k]) : expr]),
-    );
-    return { ...e, set };
+    const keys = Object.keys(e.set ?? {});
+    if (!keys.every((k) => k in at)) return e;
+    return { ...e, set: Object.fromEntries(keys.map((k) => [k, numExpr(at[k])])) };
   });
   return { ...held, doc: { ...held.doc, operatingRange } };
 }

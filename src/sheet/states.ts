@@ -239,15 +239,25 @@ export interface NoneInRangeData extends SearchData, NoSolutionRead {
   readonly endsRead: boolean;
 }
 
-/** Where a search found its relation giving no number: nowhere in its stretch (`reason`: why at
- *  its low end); at one point only (with the ends stepped in from); or across the crossing, which
- *  lies `between` two points where the points tried do not evaluate. */
+/** A point a search tried where its relation gave no number: the value of the unknown, the
+ *  evaluation's own words, and every item that failed there with its cause (a device read beyond
+ *  its table among them, as `outside-table`). A requirement that fails stops nothing, so it is not
+ *  one of them. */
+export interface UnevaluablePoint {
+  readonly x: number;
+  readonly reason: string;
+  readonly failed: readonly { readonly ref: ItemRef; readonly cause: Cause }[];
+}
+
+/** Where a search found its relation giving no number: nowhere in its stretch (`points`: its low
+ *  end, its middle and its high end, the three it tries before it stops); at one point only (with
+ *  the ends stepped in from); or across the crossing, which lies `between` two points where the
+ *  points tried do not evaluate (`points`: the three of its last step — the point inside the
+ *  bracket, and the last point that gave no number on each side of it). */
 export type UnevaluableAt =
   | {
       readonly where: 'nowhere';
-      readonly reason: string;
-      readonly by?: ItemRef;
-      readonly byCause?: Cause;
+      readonly points: readonly UnevaluablePoint[];
     }
   | {
       readonly where: 'one-point';
@@ -259,8 +269,7 @@ export type UnevaluableAt =
       readonly ends: readonly [SearchEnd, SearchEnd];
       readonly between: readonly [number, number];
       readonly reason: string;
-      readonly by?: ItemRef;
-      readonly byCause?: Cause;
+      readonly points: readonly UnevaluablePoint[];
     };
 
 /**
@@ -659,6 +668,15 @@ export const isComplete = (res: { items?: readonly Item[] }): boolean =>
 
 /** Whether an item is a solved param the run held at a given value instead of solving. */
 export const isHeld = (i: Item): boolean => i.status === 'ok' && i.attributes?.kind === 'held';
+
+const HARDWARE: ReadonlySet<ItemKind> = new Set(['device', 'search', 'sheet']);
+
+/** Whether a run has a design: every device, search and sheet item is ok, at every depth of the
+ *  list. A search held at a given value instead of solved counts as ok (isHeld). Values and
+ *  requirements do not enter: a value that gives no number or a requirement that fails leaves the
+ *  hardware in place, so the range ends and held conditions still run on it. */
+export const hasDesign = (items: readonly Item[]): boolean =>
+  items.every((i) => !HARDWARE.has(i.kind) || i.status === 'ok' || isHeld(i));
 
 const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
   items.flatMap((i) =>

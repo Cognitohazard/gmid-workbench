@@ -221,7 +221,7 @@ export function runSheet(
   const wholeSheet = errors.length > entries.length;
   const rangeEnds = res.rangeEnds?.map((e) => {
     const own = pre.filter((w) => w.severity === 'error' && onEnd(w) && w.location === e.name);
-    const notRun = !e.items?.length || isNotCalculated(e.items) || wholeSheet;
+    const notRun = !e.items?.length || isNotCalculated(e.items) || wholeSheet || own.length > 0;
     if (!notRun && !own.length && !entries.length) return e;
     const list = withFindings(
       notRun
@@ -231,8 +231,21 @@ export function runSheet(
       r.doc,
       'validation',
     );
-    const { verdict: _verdict, ...rest } = e;
     const blocks = blockLists(r.doc, list, e.blocks, true);
+    // An end refused on its own entry is not run: it carries nothing its run evaluated, no set
+    // values, no checks, no landing and no verdict.
+    if (own.length)
+      return {
+        name: e.name,
+        state: 'not-run' as const,
+        set: {},
+        checks: [],
+        solved: {},
+        warnings: [],
+        items: list,
+        ...(blocks ? { blocks } : {}),
+      };
+    const { verdict: _verdict, ...rest } = e;
     return { ...rest, items: list, ...(blocks ? { blocks } : {}), ...withVerdict(list, r.doc) };
   });
   // Each block's own list is the run's list, validation's findings included, under its path.

@@ -371,7 +371,12 @@ group('the text module builds today’s messages from the data', () => {
         simplifications: [],
         why: {
           kind: 'unevaluable',
-          at: { where: 'nowhere', reason: 'sqrt(-1-x) - (2) does not resolve to a finite number' },
+          at: {
+            where: 'nowhere',
+            points: [
+              { x: 0, reason: 'sqrt(-1-x) - (2) does not resolve to a finite number', failed: [] },
+            ],
+          },
         },
       },
     };
@@ -654,14 +659,20 @@ group('the texts a reader sees, by the message standard', () => {
             tolRel: 1e-6,
             off: [{ name: 'V_tail', tolerance: 1e-6 }],
           },
-          { kind: 'unevaluable', at: { where: 'nowhere', reason: '' } },
+          { kind: 'unevaluable', at: { where: 'nowhere', points: [] } },
           {
             kind: 'unevaluable',
             at: { where: 'one-point', end: ends.ends[0], stepped: [] },
           },
           {
             kind: 'unevaluable',
-            at: { where: 'crossing', ends: ends.ends, between: [0.3, 0.4], reason: '' },
+            at: {
+              where: 'crossing',
+              ends: ends.ends,
+              between: [0.3, 0.4],
+              reason: '',
+              points: [],
+            },
           },
         ] as DidNotSettleData['why'][]
       ).map((why): [Cause] => [
@@ -1240,7 +1251,7 @@ group('a text for every item the types allow', () => {
           why: 'not-finite',
           name: '',
           reason: '',
-          unevaluable: { member: sd, at: { where: 'nowhere', reason: '' } },
+          unevaluable: { member: sd, at: { where: 'nowhere', points: [] } },
         },
       },
       { kind: 'no-solution', data: { ...sd, ...read, shown: 'monotonic' } },

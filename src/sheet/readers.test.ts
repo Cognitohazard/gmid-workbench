@@ -211,7 +211,7 @@ group('a range end', () => {
       expect(c.marginPct.every((m) => typeof m === 'number')).toBe(true);
   });
 
-  it('has no verdict where the engine did not calculate it, and names why', () => {
+  it('is not run and has no verdict where its own entry is refused, and names why', () => {
     const res = runSheet(
       {
         ...ota,
@@ -223,11 +223,12 @@ group('a range end', () => {
     );
     const [bad, other] = res.rangeEnds ?? [];
     expect(bad.verdict).toBeUndefined();
+    expect(bad).toMatchObject({ state: 'not-run', set: {}, checks: [] });
     expect(bad.items).toEqual([
       expect.objectContaining({
         kind: 'sheet',
         status: 'failed',
-        cause: expect.objectContaining({ kind: 'cannot-evaluate' }),
+        cause: expect.objectContaining({ kind: 'not-read' }),
       }),
     ]);
     expect(other.verdict?.verdict).toBeDefined();
