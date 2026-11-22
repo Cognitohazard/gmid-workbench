@@ -1764,8 +1764,8 @@ export function withheldClause(r: WithheldOn): Line {
   }
 }
 
-/** The item of the design point's list a pointer of a range end names. */
-const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
+/** The item of the design point's list a pointer names. */
+export const pointedAt = (r: ItemRef, design: readonly Item[]): Item | undefined =>
   design.find(
     (i) =>
       i.kind === r.kind &&
@@ -1774,16 +1774,14 @@ const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
       i.path.every((p, k) => p === r.path[k]),
   );
 
-/** Why a range end is not calculated, from the design point's items its pointers name: the design
- *  point has no design where one of them is not complete (incompleteOn) for a reason other than
- *  the statements; else its statements do not determine one design; else it rests on an assumed
- *  level. Undefined where none of these is what the items say. */
 /** The clause every text that says the design point gives no design to run on is written with:
  *  a range end not calculated or not run, a held condition not run, and the condition issue. */
 export const noDesignClause = (): Line => t`the design point has no design`;
 
-/** Why the engine did not calculate a range end, from the end's own item: the clause its pointers
- *  into the design point's list give (noDesignClause). */
+/** Why a range end is not calculated, from the design point's items its pointers name: the design
+ *  point has no design (noDesignClause) where one of them failed for a cause other than
+ *  not-determined; else its statements do not determine one design; else it rests on an assumed
+ *  level. Undefined where none of these is what the items say. */
 export function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
   const items = on.flatMap((r) => {
     const i = r.frame === 'design' ? pointedAt(r, design) : undefined;

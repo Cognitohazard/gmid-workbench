@@ -624,8 +624,9 @@ export type ConditionRun =
        *  refusal — the numbers are how an author finds out why. */
       readonly result?: SheetResult;
       /** The item list the issues point into: on a condition declined because the sheet does not
-       *  validate, the list validation's findings make (withFindings); on one declined because the
-       *  design point has no design, the design point's list. */
+       *  validate, the list validation's findings make (withFindings); on one declined after the
+       *  design point ran (it has no design, or it rests on an assumed level), the design point's
+       *  list. */
       readonly items?: readonly Item[];
       /** On a condition asked about and declined with no answer, before anything ran: the DC
        *  wiring report saying the check did not run (see unwalkedReport), as a range end declined

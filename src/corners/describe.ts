@@ -22,6 +22,7 @@ import {
   lineText,
   nm,
   noDesignClause,
+  pointedAt,
   quantityText,
   standardProblems,
   t,
@@ -393,9 +394,7 @@ export function pointText(place: PointPlace): Said {
     ]);
   // A condition declined before anything ran: its range ends were never run.
   const ran = t`The engine did not run range end ${nm(name)} at ${where}`;
-  return said(
-    noDesignToHold(run) ? [t`${ran}, because ${noDesignClause()}.`] : [t`${ran}.`],
-  );
+  return said(noDesignToHold(run) ? [t`${ran}, because ${noDesignClause()}.`] : [t`${ran}.`]);
 }
 
 /** Whether a condition was declined because the design was not evaluated where it is sized. */
@@ -590,9 +589,7 @@ export function conditionIssueText(
         ? said([
             t`The engine did not run ${where}, because ${noDesignClause()}.`,
             ...issue.on.flatMap((r) => {
-              const i = design?.find(
-                (d) => d.kind === r.kind && d.name === r.name && d.path.join('.') === r.path.join('.'),
-              );
+              const i = design && pointedAt(r, design);
               return i ? [designLine(i)] : [];
             }),
           ])

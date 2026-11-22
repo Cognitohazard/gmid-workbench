@@ -1,6 +1,6 @@
 import { describe as group, expect, it } from 'vitest';
 import { generateDemoDevice, scaleQuantities } from '../demo';
-import { lineText, noDesignClause, standardProblems, type Line } from '../sheet/describe';
+import { lineText, noDesignClause, standardProblems, textOf, type Line } from '../sheet/describe';
 import { runSheet, type SheetDoc } from '../sheet';
 import { REFS, sheet, table } from '../sheet/library.fixtures';
 import type { DeviceTable, TableMeta } from '../types';
@@ -642,6 +642,24 @@ group('the aggregate from real runs', () => {
           expect.objectContaining({ status: 'withheld', on: [expect.objectContaining(search)] }),
         ]);
       }
+    });
+
+    it('says what stopped the failed search at each value of the unknown it tried', () => {
+      const doc = withValue('otas/five-transistor-ota.json', 'gm_id_in', () => 60);
+      const search = runSheet(doc, table, undefined, REFS).items!.find(
+        (i) => i.kind === 'search' && i.name === 'V_tail',
+      )!;
+      expect(search.status).toBe('failed');
+      const said = search.status === 'failed' ? textOf(search.cause, search).lines : [];
+      expect(said.slice(1, 8)).toEqual([
+        'The constraint of V_tail gives no number at any value that the engine tried.',
+        'At V_tail = 0 V, part in asks for a gm/ID of 60 S/A.',
+        'The table holds values of gm/ID from 2.6 S/A to 29.7 S/A.',
+        'At V_tail = 0.45 V, part in asks for a gm/ID of 60 S/A.',
+        'The table holds values of gm/ID from 2.9 S/A to 29.7 S/A.',
+        'At V_tail = 0.9 V, part in asks for a gm/ID of 60 S/A.',
+        'The table holds values of gm/ID from 3.4 S/A to 29.7 S/A.',
+      ]);
     });
 
     it('names the search with no crossing as what the held condition waits on', () => {

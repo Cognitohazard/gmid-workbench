@@ -676,7 +676,7 @@ const HARDWARE: ReadonlySet<ItemKind> = new Set(['device', 'search', 'sheet']);
  *  requirements do not enter: a value that gives no number or a requirement that fails leaves the
  *  hardware in place, so the range ends and held conditions still run on it. */
 export const hasDesign = (items: readonly Item[]): boolean =>
-  items.every((i) => !HARDWARE.has(i.kind) || i.status === 'ok' || isHeld(i));
+  items.every((i) => !HARDWARE.has(i.kind) || i.status === 'ok');
 
 const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
   items.flatMap((i) =>

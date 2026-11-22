@@ -2161,20 +2161,15 @@ function checkProblems(doc: SheetDoc): QAWarning[] {
  * defined by numbers the designer gives: the expression may read numbers, constants, and params of
  * the same sheet whose typed value the engine does not solve, constrain or hold. Anything else (an
  * equation, a value a block provides, a device quantity, a solved or held param, a name the sheet
- * does not have) is returned, in the order the expression reads it. `alsoAllowed` admits further
- * names, for a caller whose ends may also read them. Empty for an expression that does not parse.
+ * does not have) is returned, in the order the expression reads it. Empty for an expression that
+ * does not parse.
  */
-export function setReads(
-  doc: SheetDoc,
-  expr: unknown,
-  alsoAllowed: ReadonlySet<string> = new Set(),
-): string[] {
+export function setReads(doc: SheetDoc, expr: unknown): string[] {
   if (typeof expr !== 'string' || !parses(expr)) return [];
   const params = new Map(doc.params.map((p) => [p.name, p]));
   // An equation may take a constant's name, and the sheet then reads its own value.
   const equations = new Set(doc.equations.map((e) => e.name));
   return ALL_NAMES.compile(expr).names.filter((n) => {
-    if (alsoAllowed.has(n)) return false;
     const p = params.get(n);
     if (p) return engineSolved(p) || holds(p);
     return equations.has(n) || !Object.hasOwn(CONSTANTS, n);
