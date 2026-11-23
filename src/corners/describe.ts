@@ -16,10 +16,13 @@ import type { SheetDoc } from '../sheet';
 import {
   andLines,
   describe,
+  designLine,
   designReason,
   incompleteText,
   lineText,
   nm,
+  noDesignClause,
+  pointedAt,
   quantityText,
   standardProblems,
   t,
@@ -372,7 +375,7 @@ export function pointText(place: PointPlace): Said {
     return said(
       noDesignToHold(run)
         ? [
-            t`The engine did not calculate the held design at ${where}, because the design point has no design.`,
+            t`The engine did not calculate the held design at ${where}, because ${noDesignClause()}.`,
           ]
         : issueLines(run, device),
     );
@@ -411,15 +414,13 @@ export function pointText(place: PointPlace): Said {
     ]);
   // A condition declined before anything ran: its range ends were never run.
   const ran = t`The engine did not run range end ${nm(name)} at ${where}`;
-  return said(
-    noDesignToHold(run) ? [t`${ran}, because the design point has no design.`] : [t`${ran}.`],
-  );
+  return said(noDesignToHold(run) ? [t`${ran}, because ${noDesignClause()}.`] : [t`${ran}.`]);
 }
 
 /** Whether a condition was declined because the design was not evaluated where it is sized. */
 const noDesignToHold = (run: ConditionRun): boolean =>
   run.state === 'not-evaluated' &&
-  run.issues.some((i) => i.kind === 'no-design' && i.reason === 'base-not-evaluated');
+  run.issues.some((i) => i.kind === 'no-design' && i.reason === 'no-design-at-base');
 
 // --- the margins ---------------------------------------------------------------------------
 
@@ -577,6 +578,7 @@ export function conditionIssueText(
   issue: ConditionIssue,
   key: ConditionKey,
   device?: CharacterizedDevice,
+  design?: readonly Item[],
 ): Said {
   const where = conditionWords(device, key);
   const said = (lines: Line[]): Said => ({ lines, notes: notesOf(device, [key]) });
@@ -603,8 +605,14 @@ export function conditionIssueText(
         t`Load tables of ${nm(issue.device)} that sweep the same axes.`,
       ]);
     case 'no-design':
-      return issue.reason === 'base-not-evaluated'
-        ? said([t`The engine did not run ${where}, because the design point has no design.`])
+      return issue.reason === 'no-design-at-base'
+        ? said([
+            t`The engine did not run ${where}, because ${noDesignClause()}.`,
+            ...issue.on.flatMap((r) => {
+              const i = design && pointedAt(r, design);
+              return i ? [designLine(i)] : [];
+            }),
+          ])
         : said([
             t`The sheet names no condition to size the design at, so the engine did not run ${where}.`,
             t`Choose the condition at which the engine sizes the design.`,
@@ -645,7 +653,7 @@ export function issueFindings(run: ConditionRun): FindingText[] {
  *  items' own text. */
 function issueLines(run: ConditionRun, device?: CharacterizedDevice): Line[] {
   if (run.state !== 'not-evaluated') return [];
-  const own = run.issues.flatMap((i) => conditionIssueText(i, run.key, device).lines);
+  const own = run.issues.flatMap((i) => conditionIssueText(i, run.key, device, run.items).lines);
   const items = issueFindings(run).flatMap((f) => f.segments);
   return distinct([...own, ...items]);
 }

@@ -21,6 +21,7 @@ import {
   MAX_BLOCK_DEPTH,
   PARAM_CLASSES,
   RANGE_END_KEYS,
+  OPERATING_AXIS_KEYS,
   VAR_KEYS,
   cloneDoc,
   type CheckKind,
@@ -32,6 +33,7 @@ import {
   type SheetEquation,
   type SheetGivens,
   type SheetRangeEnd,
+  type SheetAxis,
   type SheetVar,
 } from './types';
 
@@ -119,6 +121,7 @@ export function sanitizeSheet(
     'blocks',
     'provides',
     'operatingRange',
+    'operatingAxes',
   ] as const)
     if (o[k] !== undefined && !Array.isArray(o[k])) lost?.push(k);
   // Keep only the string-valued entries of an authored name→expression map, recording the
@@ -339,6 +342,27 @@ export function sanitizeSheet(
       })
     : [];
 
+  // Operating axes: kept on the same terms as range ends. An end typed as a number is the number
+  // written as an expression; an axis without a param or with an end of any other kind is dropped
+  // and recorded, never read as a narrower range.
+  const endText = (v: unknown): string | undefined =>
+    typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : undefined;
+  const axes: SheetAxis[] = Array.isArray(o.operatingAxes)
+    ? o.operatingAxes.flatMap((a, i) => {
+        if (!a || typeof a !== 'object') return drop(`operatingAxes[${i}]`);
+        const aa = a as Record<string, unknown>;
+        const lo = endText(aa.lo);
+        const hi = endText(aa.hi);
+        if (typeof aa.param !== 'string' || !aa.param || lo === undefined || hi === undefined)
+          return drop(`operatingAxes[${i}]`);
+        unknownKeys(aa, OPERATING_AXIS_KEYS, `operatingAxes[${i}].`);
+        const out: SheetAxis = { param: aa.param, lo, hi };
+        if (typeof aa.note === 'string') out.note = aa.note;
+        else dropField(aa.note !== undefined, `operatingAxes[${i}].note`);
+        return [out];
+      })
+    : [];
+
   return {
     title: str(o.title, 'Sheet'),
     ...(typeof o.description === 'string' && o.description ? { description: o.description } : {}),
@@ -352,6 +376,7 @@ export function sanitizeSheet(
     ...(blocks.length ? { blocks } : {}),
     ...(provide.length ? { provides: provide } : {}),
     ...(rangeEnds.length ? { operatingRange: rangeEnds } : {}),
+    ...(axes.length ? { operatingAxes: axes } : {}),
     // The format version and the netlist (nodes, levels, elements, ports, analyses), carried by the
     // core's own walk for the reason the key sets above are the core's.
     ...carriedDocWiring(o, lost),

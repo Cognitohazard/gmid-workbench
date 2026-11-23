@@ -276,7 +276,7 @@ describe('sheet library: vetting lints', () => {
     for (const [file, gates, more] of cases) {
       const res = runSheet(sheet(file), table, undefined, REFS);
       expect([file, res.held]).toEqual([file, undefined]);
-      const end = res.rangeEnds?.find((e) => e.name === 'cm-lo');
+      const end = res.rangeEnds?.find((e) => e.name === 'CM_dc=lo');
       expect(Object.keys(end?.solved ?? {}).sort()).toEqual(
         [...Object.keys(gates), ...more, 'V_tail', 'out_share'].sort(),
       );
@@ -1495,7 +1495,7 @@ describe('exemplar goldens: 5T OTA', () => {
     // linearized reach advisory checks the range ends replaced must stay gone. Whether the demo
     // device COMPLIES at those ends is deliberately not asserted — budgets are tuned for real
     // tables.
-    expect(res.rangeEnds?.map((e) => e.name)).toEqual(['cm-lo', 'cm-hi']);
+    expect(res.rangeEnds?.map((e) => e.name)).toEqual(['CM_dc=lo', 'CM_dc=hi']);
     const [lo, hi] = res.rangeEnds!;
     expect(lo.solved.V_tail).toBeLessThan(res.values.V_tail);
     expect(hi.solved.V_tail).toBeGreaterThan(res.values.V_tail);

@@ -45,7 +45,7 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low end. The cm-lo range end re-evaluates the whole sheet here, so this claim is CHECKED at every evaluation, on the design this run produced — the sweep shows the widest range that would close (from 0.96 V up to 1.39 V on a sky130 tt realization at the shipped choices: below it the tail device leaves saturation, and above it the pair's diode-side transistor does). The range end checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low end. The CM_dc operating axis re-evaluates the whole sheet here, so this claim is CHECKED at every evaluation, on the design this run produced — the sweep shows the widest range that would close (from 0.96 V up to 1.39 V on a sky130 tt realization at the shipped choices: below it the tail device leaves saturation, and above it the pair's diode-side transistor does). The axis checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -53,7 +53,7 @@
       "value": 1.35,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high end — its ENDPOINT checked by the cm-hi range end the same way",
+      "note": "input CM range the application presents, high end — its ENDPOINT checked at the high end of the CM_dc operating axis the same way",
       "class": "independent"
     },
     {
@@ -528,16 +528,12 @@
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage — lower V_tail, or spend less diode drop (higher gm_id_ld)"
     }
   ],
-  "operatingRange": [
+  "operatingAxes": [
     {
-      "name": "cm-lo",
-      "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low end, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every physical and spec check must hold there. Replaces the linearized reach estimate this sheet used to carry"
-    },
-    {
-      "name": "cm-hi",
-      "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high end, checked the same way. The range ends check the ENDPOINTS; the interior is monotone for the saturation mechanisms here, and the CM_dc sweep remains the authority on the full landscape"
+      "param": "CM_dc",
+      "lo": "CM_lo",
+      "hi": "CM_hi",
+      "note": "the claimed common-mode range, checked exactly at both ends: the whole sheet re-evaluates at CM_dc = CM_lo and at CM_dc = CM_hi on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every physical and spec check must hold there. Replaces the linearized reach estimate this sheet used to carry. The axis checks the ENDPOINTS; the interior is monotone for the saturation mechanisms here, and the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"],

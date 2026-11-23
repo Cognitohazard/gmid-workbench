@@ -753,7 +753,7 @@ describe('runCondition', () => {
     expect(held?.state).toBe('not-evaluated');
     if (held?.state !== 'not-evaluated') return;
     expect(held.issues[0].message).toBe(
-      `the design was not evaluated at ${assumed}, where it is sized, so there is nothing to hold here`,
+      `the design point has no design at ${assumed}, where it is sized, so there is nothing to hold here`,
     );
     // Two tables claiming one condition are named by the device's own table there.
     const twice = soleDevice([
@@ -1395,20 +1395,20 @@ describe('runCondition', () => {
   });
 
   it('asks every condition about the same range, resolved once at the base', () => {
-    // The range end is written against the design's own gain: "a floor 10 below A". At the base
-    // A = 36, so that end is Floor = 26. The second condition halves the gain to 18 — and the
-    // end it is asked about is still Floor = 26, the application's number, not 18 - 10 = 8.
-    // There the held design has A = 18 against a floor of 26 and does not comply; re-reading the
-    // expression per condition would have asked 18 >= 8 and passed.
+    // The range end is written against a typed param: "a floor 10 below Target", with Target = 36,
+    // so that end is Floor = 26. The second condition halves the gain to 18 — and the end it is
+    // asked about is still Floor = 26, the number worked out at the base. There the held design
+    // has A = 18 against a floor of 26 and does not comply.
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
     const doc: SheetDoc = {
       ...gainDoc(0),
       params: [
         { name: 'L', value: 0.5e-6 },
         { name: 'Floor', value: 0 },
+        { name: 'Target', value: (VA_PER_L * 0.5e-6 + 0.5) * 12 },
       ],
       checks: [{ id: 'gain', kind: 'spec', lhs: 'A', op: '>=', rhs: 'Floor' }],
-      operatingRange: [{ name: 'tight', set: { Floor: 'A - 10' } }],
+      operatingRange: [{ name: 'tight', set: { Floor: 'Target - 10' } }],
     };
     const [tt, ss] = runConditions(
       doc,
@@ -1475,19 +1475,21 @@ describe('runCondition', () => {
   });
 
   it('fixes every range end at the base, not only the first', () => {
-    // Two ends, both written against the design's own gain (36 at the base, 18 at the slow
-    // condition). Each must be asked at the base's number at both conditions: 31 and 16.
+    // Two ends, both written against a typed param equal to the base's gain (36; the gain is 18
+    // at the slow condition). Each must be asked at the base's number at both conditions: 31
+    // and 16.
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
     const doc: SheetDoc = {
       ...gainDoc(0),
       params: [
         { name: 'L', value: 0.5e-6 },
         { name: 'Floor', value: 0 },
+        { name: 'Target', value: (VA_PER_L * 0.5e-6 + 0.5) * 12 },
       ],
       checks: [{ id: 'gain', kind: 'spec', lhs: 'A', op: '>=', rhs: 'Floor' }],
       operatingRange: [
-        { name: 'near', set: { Floor: 'A - 5' } },
-        { name: 'far', set: { Floor: 'A - 20' } },
+        { name: 'near', set: { Floor: 'Target - 5' } },
+        { name: 'far', set: { Floor: 'Target - 20' } },
       ],
     };
     const runs = runConditions(
@@ -1515,12 +1517,12 @@ describe('runCondition', () => {
     expect(worst?.marginPct).toBeCloseTo((18 - 31) / 31, 2);
   });
 
-  it('leaves the range ends of a held condition unasked when its own centre does not settle', () => {
+  it('asks the range ends of a held condition even when its own centre does not settle', () => {
     // A solved node whose relation reads the device: y = A + x must equal 41, with A the
     // intrinsic gain. At the base A = 36, so x lands at 5. The slow condition halves the gain to
     // 18, the held design then needs x = 23, and the search range [0, 10] does not contain it:
-    // the held centre has no answer, and a centre that did not settle leaves nothing to ask at
-    // the range end.
+    // the held centre has no answer. The hardware comes from the design point, which has a
+    // design, so the range end is still asked, and it has no answer of its own.
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
     const doc = notACircuit({
       title: 'unsettled-held',
@@ -1552,7 +1554,7 @@ describe('runCondition', () => {
     expect(ss.state).toBe('not-evaluated');
     expect(ss.points.map((p) => [p.rangeEnd, p.state])).toEqual([
       [undefined, 'no-answer'],
-      ['hi', 'not-run'],
+      ['hi', 'no-answer'],
     ]);
     expect(ss.points[0].error).toMatch(/does not change sign/);
   });
@@ -2279,13 +2281,18 @@ describe('sweepAtCondition — one condition, sized there or held there', () => 
       4,
       projectingResolver(noDevices, tt),
       REFS,
+      { range: 'checked' },
     );
     const {
       key: at,
       base,
       design,
       ...sweep
-    } = sweepAtCondition(doc, param, device, tt, noDevices, REFS, { base: tt, points: 4 });
+    } = sweepAtCondition(doc, param, device, tt, noDevices, REFS, {
+      base: tt,
+      points: 4,
+      range: 'checked',
+    });
     expect([at, base, design]).toEqual([tt, tt, 'sized']);
     expect(sweep).toEqual(plain);
     expect(plain.verdicts.length).toBe(plain.x.length);
@@ -2751,7 +2758,7 @@ describe('one held verdict over points, and what a declined condition says as da
     });
     const [base, other] = runConditions(unreachable, primary, [tt, ss], noDevices, undefined, tt);
     expect(other.state === 'not-evaluated' && other.issues).toEqual([
-      expect.objectContaining({ kind: 'no-design', reason: 'base-not-evaluated', base: tt }),
+      expect.objectContaining({ kind: 'no-design', reason: 'no-design-at-base', base: tt }),
     ]);
     // The base itself did not complete: its issue points at the failed items, and nothing else.
     expect(base.state).toBe('not-evaluated');

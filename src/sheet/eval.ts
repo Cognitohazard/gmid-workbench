@@ -60,6 +60,7 @@ import {
   stands,
   unfinishedBecause,
   withParams,
+  rangePoints,
   type SolveFailure,
   type SolveRange,
 } from './types';
@@ -78,6 +79,7 @@ import {
 } from './validate';
 import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
+  hasDesign,
   noSolutionCause,
   type Cause,
   type HeldVerdict,
@@ -88,6 +90,7 @@ import {
   type SearchData,
   type SearchEnd,
   type UnevaluableAt,
+  type UnevaluablePoint,
   type WithheldOn,
   withSet,
 } from './states';
@@ -132,7 +135,8 @@ import type {
   SheetGivens,
   SheetBlockReport,
   SheetDoc,
-  SheetRangeEnd,
+  RangePoint,
+  CornerKey,
   RangeEndReport,
   PointOutcome,
   PointState,
@@ -2325,10 +2329,10 @@ export function evaluateSheet(
     assumed: opts.assumed ?? dcInputs(doc).assumed,
     settings: settingsFrom(opts.settings ?? DEFAULT_SETTINGS),
   };
-  // Array.isArray, not truthiness: evaluate never throws, and a malformed doc (operatingRange as a
-  // string or object — validation's problem) must degrade to a plain evaluation, not a
-  // TypeError out of .map.
-  return Array.isArray(doc.operatingRange) && doc.operatingRange.length
+  // rangePoints reads only well-formed lists: evaluate never throws, and a malformed doc
+  // (operatingRange or operatingAxes as a string or object — validation's problem) degrades to a
+  // plain evaluation, not a TypeError.
+  return rangePoints(doc).length
     ? evaluateWithRange(doc, table, resolveDevice, asked)
     : evaluateNode(doc, table, resolveDevice, 0, asked);
 }
@@ -2358,6 +2362,10 @@ export interface EvaluateOptions {
    *  block path for a block's, as findings name it (see devicesIn). For reading how hard the
    *  sheet's formulas lean on a property; it never describes the hardware. */
   perturb?: Readonly<{ device: string; key: string; factor: number }>;
+  /** Ask only this point of the operating range, by its name in rangePoints (a corner's key or a
+   *  named end's name): a probe that reads one check living on one point need not run the others.
+   *  Absent: every point is asked. */
+  rangePoint?: string;
 }
 
 /** How one node of a tree is evaluated (see evaluateNode): the tree's evaluation budget, and, at
@@ -2621,7 +2629,12 @@ function unevaluableCause(
   reason: string,
   outside: OutsideTable | undefined,
 ): Cause {
-  const by = 'by' in at ? at.by : undefined;
+  // What stopped it, for a reader of the cause alone: the part read beyond its table where there
+  // was one, else the first item that failed at the low end (nowhere) or at the last point on
+  // the first side of the crossing that gave no number.
+  const lead =
+    at.where === 'nowhere' ? at.points[0] : at.where === 'crossing' ? at.points[1] : undefined;
+  const by = outside ? deviceRef(outside.device) : lead?.failed[0]?.ref;
   return {
     kind: 'cannot-evaluate',
     data: {
@@ -3568,29 +3581,24 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
   };
 }
 
-/** The first item that failed in one evaluation of the node, with its cause: what a point that
- *  does not evaluate was stopped by. A requirement that fails and a statement that is false stop
- *  nothing from evaluating, so neither is it. */
-function failedAt(doc: SheetDoc, res: SheetResult): { ref: ItemRef; cause: Cause } | undefined {
-  const first = withFindings(itemsOf(doc, res), res.warnings, doc, 'evaluation').find(
-    (i) => i.status === 'failed' && i.cause.kind !== 'fails' && i.cause.kind !== 'statement-false',
+/** Every item that failed in one evaluation of the node, with its cause: what a point that does
+ *  not evaluate was stopped by. A device read beyond its table is one, as `outside-table`. A
+ *  requirement that fails and a statement that is false stop nothing from evaluating, so neither
+ *  is one. */
+function failedAt(doc: SheetDoc, res: SheetResult): { ref: ItemRef; cause: Cause }[] {
+  return withFindings(itemsOf(doc, res), res.warnings, doc, 'evaluation').flatMap((i) =>
+    i.status === 'failed' && i.cause.kind !== 'fails' && i.cause.kind !== 'statement-false'
+      ? [{ ref: { kind: i.kind, path: i.path, name: i.name }, cause: i.cause }]
+      : [],
   );
-  return first?.status === 'failed'
-    ? { ref: { kind: first.kind, path: first.path, name: first.name }, cause: first.cause }
-    : undefined;
 }
 
-/** What stopped a point from evaluating, as UnevaluableAt holds it: the part read beyond its
- *  table, where one was, else the first item that failed there, with its cause. */
-function byAt(
-  doc: SheetDoc,
-  res: SheetResult,
-  outside: OutsideTable | undefined,
-): { by?: ItemRef; byCause?: Cause } {
-  if (outside) return { by: deviceRef(outside.device) };
-  const failed = failedAt(doc, res);
-  return failed ? { by: failed.ref, byCause: failed.cause } : {};
-}
+/** A point a search tried that gave no number, as UnevaluableAt holds it. */
+const unevaluablePoint = (doc: SheetDoc, p: Probe): UnevaluablePoint => ({
+  x: p.x,
+  reason: p.why ?? '',
+  failed: failedAt(doc, p.res),
+});
 
 /** The two ends a search brackets between: the ends of the stated range, each stepped inward to
  *  the nearest point that evaluates where the relation does not evaluate there, with what each
@@ -3613,7 +3621,7 @@ function ends(
   const stepOf = (why: string, bad: Probe): Step => {
     const outside = outsideIn(bad.res)[0];
     if (outside) return { reason: why, outside };
-    const failed = failedAt(s.doc, bad.res);
+    const [failed] = failedAt(s.doc, bad.res);
     return { reason: why, ...(failed ? { failed } : {}) };
   };
   if (lo.g === undefined || hi.g === undefined) {
@@ -3628,11 +3636,7 @@ function ends(
         return s.fail(
           unevaluableCause(
             s.data(),
-            {
-              where: 'nowhere',
-              reason: lo.why as string,
-              ...byAt(s.doc, lo.res, outside),
-            },
+            { where: 'nowhere', points: [lo, mid, hi].map((p) => unevaluablePoint(s.doc, p)) },
             lo.why as string,
             outside,
           ),
@@ -3819,7 +3823,7 @@ function stepAround(
         ends: stretch,
         between: [Math.min(pb.x, pc.x), Math.max(pb.x, pc.x)],
         reason: nearB.why,
-        ...byAt(s.doc, nearB.bad.res, outside),
+        points: [next, nearB.bad, nearC.bad].map((p) => unevaluablePoint(s.doc, p)),
       },
       nearB.why,
       outside,
@@ -4171,12 +4175,18 @@ function solveNode(node: NodeRef): SheetResult {
  *
  * Two questions, answered apart. `feasible` is the base run's own verdict and nothing here
  * touches it. `complies` is whether that design, HELD FIXED (see coverage.ts), still works at
- * every range end — conditional on there being a design at all. When the base run did not stand,
- * every end comes back `not-run` rather than carrying a verdict about hardware the engine never
- * landed on — a failed solve withholds what it did not find (withUnfound), and "the devices that
- * do not read it sized" is nowhere near enough to have produced an instance.
- * Check FAILURES do not gate: a center that misses its spec is still a design, and whether it holds
- * across its claimed range is still a real question.
+ * every range end — conditional on there being a design at all. Where the base run sizes the
+ * design, it has one when every device, search and sheet item is ok (hasDesign); where it does
+ * not, every end comes back `not-run` rather than carrying a verdict about hardware the engine
+ * never landed on — a failed solve withholds what it did not find (withUnfound), and "the devices
+ * that do not read it sized" is nowhere near enough to have produced an instance. A value that
+ * gives no number and a check that fails do not gate: a centre that misses its spec is still a
+ * design, and whether it holds across its claimed range is still a real question.
+ *
+ * A held run (`opts.held`) is given hardware that is already held, so each end evaluates that
+ * document as it is: no second hold, and no gate, as a held centre that is not complete says
+ * nothing about the hardware the ends run on. A search held at a given value (`opts.pinned`) is
+ * held at every end too, and marked so on each end's list.
  */
 function evaluateWithRange(
   doc: SheetDoc,
@@ -4185,14 +4195,13 @@ function evaluateWithRange(
   opts: EvaluateOptions,
 ): SheetResult {
   const base = evaluateNode(doc, table, resolveDevice, 0, opts);
-  const rangeEnds = doc.operatingRange ?? [];
-  if (!stands(base)) {
-    // No `set`: the overrides resolve against the base VALUES, which here hold no design — what a
-    // failed solve did not find is withheld from them, and what is left was never landed on as a
-    // design. Reporting the point that would have been asked about from those is reporting a
-    // phantom, the same reason a failed solve's probe is never reported as a landing.
+  const rangeEnds = rangePoints(doc).filter(
+    (e) => opts.rangePoint === undefined || e.name === opts.rangePoint,
+  );
+  if (opts.held !== true && !hasDesign(base.items ?? [])) {
+    // No `set`: no end is asked about hardware the base run did not land on.
     const items = notCalculated(base.items ?? []);
-    return { ...base, rangeEnds: rangeEnds.map((e) => unrunEnd(e.name, 'not-run', { items })) };
+    return { ...base, rangeEnds: rangeEnds.map((e) => unrunEnd(e, 'not-run', { items })) };
   }
   // A design resting on an assumed voltage has no answer at a range end: holding a typed guess
   // fixed while the range moves around it measures the guess. Asked, and declined with the
@@ -4203,13 +4212,16 @@ function evaluateWithRange(
     const nodes = unwalkedReport(doc);
     const items = notCalculated(base.items ?? []);
     const reports = rangeEnds.map((e) =>
-      unrunEnd(e.name, 'no-answer', { error, ...(nodes ? { nodes } : {}), items }),
+      unrunEnd(e, 'no-answer', { error, ...(nodes ? { nodes } : {}), items }),
     );
     return { ...base, rangeEnds: reports, complies: false };
   }
-  const held = holdHardware(doc, base);
+  const held: HeldHardware =
+    opts.held === true ? { doc, assumedSource: [], unheld: [] } : holdHardware(doc, base);
   const settings = opts.settings ?? DEFAULT_SETTINGS;
-  const reports = rangeEnds.map((e) => runRangeEnd(e, held, base, table, resolveDevice, settings));
+  const reports = rangeEnds.map((e) =>
+    runRangeEnd(e, held, base, table, resolveDevice, settings, opts.pinned),
+  );
   return {
     ...base,
     rangeEnds: reports,
@@ -4227,13 +4239,28 @@ export const withVerdict = (
   return verdict ? { verdict } : {};
 };
 
+/** A corner's key on its report: each axis end, with the value it took where it gave one. */
+const cornerOf = (point: RangePoint, set: Record<string, number>): CornerKey =>
+  point.corner!.map((c) =>
+    Number.isFinite(set[c.param]) ? { ...c, value: set[c.param] } : { ...c },
+  );
+
 /** A range end's report with nothing evaluated in it: no outcomes, no landing, no warnings, and
  *  whatever `extra` says (an error, the point asked about, the wiring report) over that. */
 const unrunEnd = (
-  name: string,
+  point: RangePoint,
   state: PointState,
   extra: Partial<RangeEndReport> = {},
-): RangeEndReport => ({ name, state, set: {}, checks: [], solved: {}, warnings: [], ...extra });
+): RangeEndReport => ({
+  name: point.name,
+  ...(point.corner ? { corner: cornerOf(point, extra.set ?? {}) } : {}),
+  state,
+  set: {},
+  checks: [],
+  solved: {},
+  warnings: [],
+  ...extra,
+});
 
 /**
  * What one evaluation of a HELD design amounts to, as an answer to "does it still work here":
@@ -4377,12 +4404,13 @@ function rangeEndCause(
  *    (a search that found no crossing included): `no-answer`, the underlying message VERBATIM in `error`, so a shared-budget
  *    starvation stays distinguishable from "nothing in the range reaches it". */
 function runRangeEnd(
-  rangeEnd: SheetRangeEnd,
+  rangeEnd: RangePoint,
   held: HeldHardware,
   base: SheetResult,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   settings: Settings,
+  pinned: EvaluateOptions['pinned'],
 ): RangeEndReport {
   // Copied per report rather than shared: the transformation allocates one list for the whole
   // document, and a consumer that sorted or de-duplicated one report's copy in place would be
@@ -4390,30 +4418,63 @@ function runRangeEnd(
   const assumed = held.assumedSource.length
     ? { assumedSource: [...held.assumedSource] }
     : undefined;
-  const scope = scalarScope(base.values);
   const over: Record<string, number> = {};
   /** Asked, and nothing was evaluated that could answer. */
   const unwalked = unwalkedReport(held.doc);
   // The error has no item of its own, so it is the failed sheet item of the end's own list.
   const unanswered = (error: string, cause: Cause): RangeEndReport =>
-    unrunEnd(rangeEnd.name, 'no-answer', {
+    unrunEnd(rangeEnd, 'no-answer', {
       set: over,
       error,
       ...(unwalked ? { nodes: unwalked } : {}),
       ...assumed,
       items: [{ kind: 'sheet', path: [], name: '', status: 'failed', cause }],
     });
+  // A named end reads every expression against the base result. A corner reads it against the base
+  // result with each axis param at its value at this corner, set in the order the axes read each
+  // other: an axis param not yet set is no value at all, never its design value.
+  const values: Record<string, number> = { ...base.values };
+  if (rangeEnd.corner) for (const c of rangeEnd.corner) delete values[c.param];
+  const scope = scalarScope(values);
+  const evalAt = (expr: string): number | undefined =>
+    evalFinite(expr, values, scope, NO_WARN, `range end ${rangeEnd.name}`);
+  const axes = new Map((held.doc.operatingAxes ?? []).map((a) => [a.param, a]));
   // `?? {}`: a half-written range end (no set) is validation's error to name; evaluate never
   // throws.
   for (const [param, expr] of Object.entries(rangeEnd.set ?? {})) {
-    const v = evalFinite(expr, base.values, scope, NO_WARN, `range end ${rangeEnd.name}`);
+    const v = evalAt(expr);
     if (v === undefined)
       return unanswered(
         `range end "${rangeEnd.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
           `number against the base result`,
-        rangeEndCause(rangeEnd.name, param, expr, base.values),
+        rangeEndCause(rangeEnd.name, param, expr, values),
       );
+    // At a corner the axis's two ends are read together: an axis whose low end lies above its high
+    // end here claims no range at this corner, and the corner is not asked.
+    const axis = rangeEnd.corner ? axes.get(param) : undefined;
+    if (axis) {
+      const atLo = rangeEnd.corner!.some((c) => c.param === param && c.end === 'lo');
+      const other = atLo ? axis.hi : axis.lo;
+      const w = evalAt(other);
+      if (w === undefined)
+        return unanswered(
+          `range end "${rangeEnd.name}": the ${param} axis's ${atLo ? 'high' : 'low'} end "${other}" ` +
+            `did not evaluate to a finite number against the base result`,
+          rangeEndCause(rangeEnd.name, param, other, values),
+        );
+      const [lo, hi] = atLo ? [v, w] : [w, v];
+      if (lo > hi) {
+        const message = `the ${param} axis runs from ${lo} down to ${hi} at this corner: its low end lies above its high end`;
+        return unanswered(`range end "${rangeEnd.name}": ${message}`, {
+          kind: 'not-determined',
+          data: { why: 'operating-range', names: [rangeEnd.name], message },
+        });
+      }
+    }
     over[param] = v;
+    // Only axes chain: a later axis reads an earlier one's value at this corner. Every entry of a
+    // named end reads the design point, so one entry never sees another's.
+    if (axis) values[param] = v;
   }
   // A hold with no recorded value has nothing to be held at. Unreachable while the base run
   // stands (a hold that does not evaluate fails it), so this is the closed door behind that.
@@ -4434,6 +4495,7 @@ function runRangeEnd(
   const res = evaluateNode(withParams(held.doc, over), table, resolveDevice, 0, {
     held: true,
     settings,
+    ...(pinned ? { pinned } : {}),
   });
   const { state, error: err } = res.point as PointOutcome;
   const outside = outsideIn(res);
@@ -4448,6 +4510,7 @@ function runRangeEnd(
   // result's warning contract stays untouched.
   return {
     name: rangeEnd.name,
+    ...(rangeEnd.corner ? { corner: cornerOf(rangeEnd, over) } : {}),
     state,
     set: over,
     checks: res.checks,

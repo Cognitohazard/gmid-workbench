@@ -1,6 +1,6 @@
 import { describe as group, expect, it } from 'vitest';
 import { generateDemoDevice, scaleQuantities } from '../demo';
-import { lineText, standardProblems, type Line } from '../sheet/describe';
+import { lineText, noDesignClause, standardProblems, textOf, type Line } from '../sheet/describe';
 import { runSheet, type SheetDoc } from '../sheet';
 import { REFS, sheet, table } from '../sheet/library.fixtures';
 import type { DeviceTable, TableMeta } from '../types';
@@ -185,7 +185,7 @@ const ranged = (floor = 1.6): SheetDoc => ({
 /** The same sheet with T = 0.5, which y = 2x + 1 cannot reach over the bracket. */
 const unreachable = (): SheetDoc => ({
   ...ranged(),
-  params: [...ranged().params.slice(0, 1), { name: 'T', value: 0.5 }],
+  params: ranged().params.map((p) => (p.name === 'T' ? { name: 'T', value: 0.5 } : p)),
 });
 
 group('one point', () => {
@@ -524,7 +524,7 @@ group('why a condition was not run', () => {
       'Load tables of nmos_demo that sweep the same axes.',
     ]);
     expect(
-      issue({ kind: 'no-design', reason: 'base-not-evaluated', base: tt, message: '' }),
+      issue({ kind: 'no-design', reason: 'no-design-at-base', base: tt, on: [], message: '' }),
     ).toEqual(['The engine did not run ss 125 °C, because the design point has no design.']);
     expect(issue({ kind: 'no-design', reason: 'no-base', message: '' })).toEqual([
       'The sheet names no condition to size the design at, so the engine did not run ss 125 °C.',
@@ -584,9 +584,10 @@ group('the aggregate from real runs', () => {
     ]);
   });
 
-  it('gives a range end not calculated at a held condition the held design’s reason', () => {
-    // Drain currents a third of tt's at ff: the held folded cascode is undetermined there, and
-    // its range ends are not calculated.
+  it('asks a range end at a held condition whose centre is undetermined', () => {
+    // Drain currents a third of tt's at ff: the held folded cascode is undetermined there. The
+    // hardware comes from the design point, which has a design, so its range ends are still
+    // asked, each giving its own verdict.
     const skewed = sole([
       retag(table, 'tt', 27),
       retag(scaleQuantities(table, { id: 0.3 }), 'ff', -40),
@@ -595,23 +596,110 @@ group('the aggregate from real runs', () => {
     const [, held] = runConditions(doc, skewed, [tt, key('ff', -40)], noDevices, REFS, tt);
     expect(held.points[0].verdict?.verdict).toBe('undetermined');
     expect(lines(pointText({ run: held, index: 1, device: skewed, doc }))).toEqual([
-      'The engine did not calculate range end cm-lo at ff −40 °C, because the held design is undetermined there.',
+      'At ff −40 °C, range end CM_dc=lo sets CM_dc to 1 V.',
+      'The held design is undetermined there, because part cbn is outside its table and part cbp is outside its table.',
     ]);
   });
 
-  it('says no margin was read, not that none is calculated, where the one run point has none', () => {
-    // An equation with no value: the design point is calculated and undetermined, so no margin is
-    // read there, and every other point waits on it.
+  group('a design point with no design', () => {
+    const ff = key('ff', -40);
+    const withValue = (
+      file: string,
+      name: string,
+      value: (min?: number, max?: number) => number,
+    ) => {
+      const doc = sheet(file);
+      const p = doc.params.find((q) => q.name === name)!;
+      p.value = value(p.min, p.max);
+      return doc;
+    };
+    /** The held condition's issue, its text, and each range end of the design point. */
+    const heldOver = (doc: SheetDoc) => {
+      const [base, held] = runConditions(doc, libraryDevice, [tt, ff], noDevices, REFS, tt);
+      expect(held.state).toBe('not-evaluated');
+      const issues = held.state === 'not-evaluated' ? held.issues : [];
+      expect(issues).toHaveLength(1);
+      return {
+        issue: issues[0],
+        text: lines(conditionIssueText(issues[0], ff, libraryDevice, base.result?.items)),
+        ends: base.result?.rangeEnds ?? [],
+      };
+    };
+    const clause = `The engine did not run ff −40 °C, because ${lineText(noDesignClause())}.`;
+
+    it('points each range end and the held condition at the search that did not close', () => {
+      // An input pair biased so weakly that the tail search reads it beyond its table everywhere.
+      const { issue, text, ends } = heldOver(
+        withValue('otas/five-transistor-ota.json', 'gm_id_in', () => 60),
+      );
+      const search = { kind: 'search', path: [], name: 'V_tail' };
+      expect(issue).toMatchObject({ kind: 'no-design', reason: 'no-design-at-base', on: [search] });
+      expect(text[0]).toBe(clause);
+      expect(ends).toHaveLength(2);
+      for (const e of ends) {
+        expect(e).toMatchObject({ state: 'not-run', set: {}, checks: [] });
+        expect(e.items).toEqual([
+          expect.objectContaining({ status: 'withheld', on: [expect.objectContaining(search)] }),
+        ]);
+      }
+    });
+
+    it('says what stopped the failed search at each value of the unknown it tried', () => {
+      const doc = withValue('otas/five-transistor-ota.json', 'gm_id_in', () => 60);
+      const search = runSheet(doc, table, undefined, REFS).items!.find(
+        (i) => i.kind === 'search' && i.name === 'V_tail',
+      )!;
+      expect(search.status).toBe('failed');
+      const said = search.status === 'failed' ? textOf(search.cause, search).lines : [];
+      expect(said.slice(1, 8)).toEqual([
+        'The constraint of V_tail gives no number at any value that the engine tried.',
+        'At V_tail = 0 V, part in asks for a gm/ID of 60 S/A.',
+        'The table holds values of gm/ID from 2.6 S/A to 29.7 S/A.',
+        'At V_tail = 0.45 V, part in asks for a gm/ID of 60 S/A.',
+        'The table holds values of gm/ID from 2.9 S/A to 29.7 S/A.',
+        'At V_tail = 0.9 V, part in asks for a gm/ID of 60 S/A.',
+        'The table holds values of gm/ID from 3.4 S/A to 29.7 S/A.',
+      ]);
+    });
+
+    it('names the search with no crossing as what the held condition waits on', () => {
+      const { issue, text } = heldOver(
+        withValue('mirrors-bias/widlar-current-source.json', 'R_s', (_, max) => max!),
+      );
+      expect(issue).toMatchObject({
+        kind: 'no-design',
+        reason: 'no-design-at-base',
+        on: [{ kind: 'search', path: [], name: 'I_out' }],
+      });
+      expect(text[0]).toBe(clause);
+    });
+
+    it('points each range end and the held condition at a device outside its table', () => {
+      const doc = withValue('mirrors-bias/matched-mirror-bank.json', 'V_out', () => 1.6);
+      doc.operatingRange = [{ name: 'lo', set: { V_out: '0.9' } }];
+      const { issue, text, ends } = heldOver(doc);
+      const device = { kind: 'device', path: [], name: 'givens' };
+      expect(issue).toMatchObject({ kind: 'no-design', reason: 'no-design-at-base', on: [device] });
+      expect(text[0]).toBe(clause);
+      expect(ends[0]).toMatchObject({ state: 'not-run', set: {}, checks: [] });
+      expect(ends[0].items).toEqual([
+        expect.objectContaining({ status: 'withheld', on: [expect.objectContaining(device)] }),
+      ]);
+    });
+  });
+
+  it('says no margin was read, not that none is calculated, where no run point has one', () => {
+    // An equation with no value: the design point is calculated and undetermined, and still has a
+    // design, so every point is run and none reads a margin.
     const doc = sheet('otas/five-transistor-ota.json');
     doc.equations.push({ name: 'y', expr: '1/0' });
     const keys = [tt, key('ss', 125), key('ff', -40)];
     const agg = aggregateConditionRuns(
       runConditions(doc, libraryDevice, keys, noDevices, REFS, tt),
     );
-    expect(agg.marginPoints).toEqual({ read: 0, unreadable: 1, notCalculated: 8, total: 9 });
+    expect(agg.marginPoints).toEqual({ read: 0, unreadable: 9, notCalculated: 0, total: 9 });
     expect(lines(tightestText(agg, libraryDevice))).toEqual([
       'The engine read no margin at any point.',
-      '8 of the 9 points are not calculated.',
     ]);
   });
 });

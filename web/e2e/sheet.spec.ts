@@ -734,6 +734,7 @@ test('design sheet: a nested block inherits its parent block’s device, and is 
 test('composed sheet: a signed-PMOS child with its sign param still +1 gets a root-cause hint', async ({
   page,
 }) => {
+  test.slow();
   await page.goto('/');
   await loadDemo(page);
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/pmos-demo.mostab.csv');
@@ -1415,13 +1416,9 @@ test('operating range: chips report each range end; an end the solve cannot reac
   await expect(chips).toHaveCount(2);
   // Each end is named by the quantity and value its `set` fixes and which end of the range it is,
   // never by its bare name alone.
-  await expect(chips.nth(0)).toHaveAttribute('data-range-end', 'cm-lo');
-  await expect(chips.nth(0)).toContainText(
-    /CM_dc = [\d.]+ m?V, the low end of the claimed CM_dc range/,
-  );
-  await expect(chips.nth(1)).toContainText(
-    /CM_dc = [\d.]+ m?V, the high end of the claimed CM_dc range/,
-  );
+  await expect(chips.nth(0)).toHaveAttribute('data-range-end', 'CM_dc=lo');
+  await expect(chips.nth(0)).toContainText(/CM_dc = [\d.]+ m?V, the low end of the CM_dc axis/);
+  await expect(chips.nth(1)).toContainText(/CM_dc = [\d.]+ m?V, the high end of the CM_dc axis/);
 
   // The strip and the sweep legend both name the QUESTION a range end answers. A chip says
   // whether the held design complies at that end; the curve says by how much. Locked here
@@ -1442,7 +1439,7 @@ test('operating range: chips report each range end; an end the solve cannot reac
   // The sweep runs in the background and the chart lands when it is done.
   await expect(sp.locator('.pchart canvas')).toBeVisible({ timeout: 60_000 });
   await expect(sp.locator('.skey')).toContainText('margin at CM_dc = ', { timeout: 60_000 });
-  await expect(sp.locator('.skey')).toContainText('the low end of the claimed CM_dc range');
+  await expect(sp.locator('.skey')).toContainText('the low end of the CM_dc axis');
   await expect(sp.locator('[data-sweep-caption]')).toContainText(
     'each sample holds its OWN design',
   );

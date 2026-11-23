@@ -156,7 +156,7 @@ const itDrawsItsTail = (
     // so the root is bracketed on the table at the default settings.
     const claimed = runSheet(withParams(doc, { CM_lo: cmTooLow }), table, undefined, REFS);
     expect(claimed.feasible).toBe(res.feasible);
-    const lo = claimed.rangeEnds!.find((e) => e.name === 'cm-lo')!;
+    const lo = claimed.rangeEnds!.find((e) => e.name === 'CM_dc=lo')!;
     expect(lo.error).toBeUndefined();
     expect(lo.state).toBe('does-not-comply');
     expect(hardFailsIn(lo)).toEqual(['tail.region']);
@@ -488,8 +488,8 @@ describe('tier-3 goldens: degenerated differential pair', () => {
     // which takes a reference programmed a little above that.
     expect(res.feasible).toBe(true);
     expect(res.rangeEnds?.map((e) => [e.name, e.state])).toEqual([
-      ['cm-lo', 'complies'],
-      ['cm-hi', 'complies'],
+      ['CM_dc=lo', 'complies'],
+      ['CM_dc=hi', 'complies'],
     ]);
   });
 });
@@ -804,7 +804,7 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     // them by repeated searches. At cm-lo every relation holds to the solve's tolerance on the
     // design the base run sized. The bias branches carry their programmed currents at their own
     // widths on the same table, so their gates sit where they sat at the design point.
-    const lo = res.rangeEnds!.find((e) => e.name === 'cm-lo')!;
+    const lo = res.rangeEnds!.find((e) => e.name === 'CM_dc=lo')!;
     expect(lo.error).toBeUndefined();
     const at = (name: string) => lo.blocks!.find((c) => c.name === name)!.sizing!;
     const gateN = lo.blocks!.find((c) => c.name === 'cbn')!.provides.V_c;
@@ -1147,8 +1147,8 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // need their 1 µm: with all of them at 0.5 µm the gain and the offset both miss.
     expect(res.feasible).toBe(true);
     expect(res.rangeEnds?.map((e) => [e.name, e.state])).toEqual([
-      ['cm-lo', 'complies'],
-      ['cm-hi', 'complies'],
+      ['CM_dc=lo', 'complies'],
+      ['CM_dc=hi', 'complies'],
     ]);
     const short = runSheet(withParams(doc, { L_cs: 0.5e-6, L_in: 0.5e-6 }), table, undefined, REFS);
     expect(hardFailsIn(short)).toEqual(expect.arrayContaining(['gain-spec', 'offset-spec']));
@@ -1174,7 +1174,7 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // held at the width the base run sized: its drain stays near the fold node, so what the tail
     // gives up lands on its own vds, and the tail device — on its reference's gate with the node
     // as its drain — delivers less there, so the pair needs less gate drive for its half.
-    const lo = res.rangeEnds!.find((e) => e.name === 'cm-lo')!;
+    const lo = res.rangeEnds!.find((e) => e.name === 'CM_dc=lo')!;
     expect(lo.error).toBeUndefined();
     const heldLo = heldAt(1.0, va(L_IN), va(L));
     expect(relErr(lo.solved.V_tail, heldLo)).toBeLessThan(1e-3);
@@ -1191,7 +1191,7 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // cm-hi lands too. The pair's gate needs BODY_FACTOR·V_tail more than it would body-grounded,
     // so the 1.45 V end is produced with the tail node at 0.746 V, inside its [0.1, 0.8] bracket
     // (body-grounded it would take 1.45 − 0.543 = 0.907 V, which the bracket does not reach).
-    const hi = res.rangeEnds!.find((e) => e.name === 'cm-hi')!;
+    const hi = res.rangeEnds!.find((e) => e.name === 'CM_dc=hi')!;
     expect(hi.error).toBeUndefined();
     expect(relErr(hi.solved.V_tail, heldAt(1.45, va(L_IN), va(L)))).toBeLessThan(1e-3);
   });
@@ -1206,7 +1206,7 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // beside the parameter says the landing lies outside the author's range.
     expect(0.8 + vgsAtBody(vgsIn, 0.8)).toBeLessThan(1.6);
     const far = runSheet(withParams(doc, { CM_hi: 1.6 }), table, undefined, REFS);
-    const hi = far.rangeEnds!.find((e) => e.name === 'cm-hi')!;
+    const hi = far.rangeEnds!.find((e) => e.name === 'CM_dc=hi')!;
     expect(hi.state).toBe('complies');
     expect(hi.error).toBeUndefined();
     expect(hi.solved.V_tail).toBeGreaterThan(0.8);
@@ -1223,8 +1223,8 @@ describe('tier-3 goldens: folded cascode OTA', () => {
       ),
     ).toBe(true);
     // The end that was already reachable is untouched by the claim beside it.
-    expect(far.rangeEnds?.find((e) => e.name === 'cm-lo')?.solved).toEqual(
-      res.rangeEnds?.find((e) => e.name === 'cm-lo')?.solved,
+    expect(far.rangeEnds?.find((e) => e.name === 'CM_dc=lo')?.solved).toEqual(
+      res.rangeEnds?.find((e) => e.name === 'CM_dc=lo')?.solved,
     );
   });
 
@@ -2030,16 +2030,16 @@ describe('operating-range honesty on the demo table', () => {
   // must never drag feasibility down with it.
   const res = runSheet(sheet('current-mirror-ota.json'), table, undefined, REFS);
 
-  it('the unreachable cm-hi end is no answer, with the solver reason, and feasibility stands', () => {
+  it('the unreachable high CM_dc end is no answer, with the solver reason, and feasibility stands', () => {
     expect(res.feasible).toBe(true);
-    const hi = res.rangeEnds?.find((e) => e.name === 'cm-hi');
+    const hi = res.rangeEnds?.find((e) => e.name === 'CM_dc=hi');
     expect(hi?.state).toBe('no-answer'); // asked, and nothing landed — not "never asked"
     expect(hi?.error).toMatch(/does not change sign/);
     expect(hi?.solved).toEqual({}); // a bracket end is never reported as a landing
     expect(res.complies).toBe(false);
   });
 
-  it('the reachable cm-lo end lands the tail node where the fixed design puts it', () => {
+  it('the reachable low CM_dc end lands the tail node where the fixed design puts it', () => {
     // Holding the widths moves the landing: the same claim proven on the design the defaults
     // produce settles the tail higher than it would with the endpoint free to re-size the
     // devices around it, which lands at (0.95 − vgs(12))/1.2 = 0.31915 V. Two things let the held
@@ -2048,7 +2048,7 @@ describe('operating-range honesty on the demo table', () => {
     // drawn at rest: the common mode is the mean of the two pair gates, which sit apart by the
     // offset, so the node sits another half offset over 1.2 higher. Locked as intent, not as a
     // regression.
-    const lo = res.rangeEnds?.find((e) => e.name === 'cm-lo');
+    const lo = res.rangeEnds?.find((e) => e.name === 'CM_dc=lo');
     expect(lo?.state).toBe('complies');
     // RECORDED from the engine on this table to six decimals. Beside it stands the held-width
     // landing in closed form: the pair's drain is the load's diode node, VDD − vgs(10), the pair

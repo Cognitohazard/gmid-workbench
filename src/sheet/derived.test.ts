@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
 import { resolvedSheet } from './resolve';
-import { levelEligibility } from './validate';
+import { levelEligibility, setReads } from './validate';
 import { legacyFeasible, legacyPointState } from './derived';
 import {
   causeFits,
@@ -30,7 +30,7 @@ import {
   type SheetDoc,
   type SheetResult,
 } from './types';
-import { loadLibrary, sheet, table, REFS } from './library.fixtures';
+import { loadLibrary, namedEnds, sheet, table, REFS } from './library.fixtures';
 import { ekvTable } from '../demo/ekv.fixtures';
 import type { DeviceTable } from '../types';
 
@@ -83,16 +83,30 @@ function readings(res: SheetResult): { at: string; field: unknown; derived: unkn
         field: e.state,
         // An end that is not calculated was not run today, or ran on a sheet whose validation
         // found an error about the sheet as a whole (see the suite of a range end's list).
-        derived: notCalculatedList(e.items)
-          ? e.state === 'not-run' ||
-            wholeSheetError(res) ||
-            restsOnAssumed(e.items, res.items ?? [])
-            ? e.state
-            : 'calculated'
-          : legacyPointState(e.items, advisoryOf({ checks: e.checks, blocks: e.blocks })),
+        // An end refused on its own entry is not run, with nothing its run evaluated.
+        derived: refusedOnEntry(e.name, e.items)
+          ? 'not-run'
+          : notCalculatedList(e.items)
+            ? e.state === 'not-run' ||
+              wholeSheetError(res) ||
+              restsOnAssumed(e.items, res.items ?? [])
+              ? e.state
+              : 'calculated'
+            : legacyPointState(e.items, advisoryOf({ checks: e.checks, blocks: e.blocks })),
       });
   return out;
 }
+
+/** Whether a range end's list holds an error of validation located on that end's own entry. */
+const refusedOnEntry = (end: string, items: readonly Item[]): boolean =>
+  items.some(
+    (i) =>
+      i.status === 'failed' &&
+      (i.cause.kind === 'not-read' || i.cause.kind === 'not-determined') &&
+      i.cause.data.stage === 'validation' &&
+      'where' in i.cause.data &&
+      i.cause.data.where === end,
+  );
 
 /** Whether a range end's list is the one of an end the engine does not calculate. */
 const notCalculatedList = (items: readonly Item[]): boolean =>
@@ -573,7 +587,7 @@ describe('the table from a finding’s rule to its cause', () => {
   });
 
   it('reads a missing decision as a design not determined, never as an entry not read', () => {
-    const d = sheet('otas/five-transistor-ota.json');
+    const d = namedEnds(sheet('otas/five-transistor-ota.json'));
     const p = d.params.find((x) => x.name === 'V_tail') as { designConstraint?: unknown };
     delete p.designConstraint;
     const res = runSheet(d, table, undefined, REFS);
@@ -591,7 +605,7 @@ describe('the table from a finding’s rule to its cause', () => {
 
 describe('a current balance that gives no number', () => {
   it('is a search that cannot be calculated, naming the part read beyond its table', () => {
-    const d = withParams(sheet('otas/inverter-based-ota.json'), { gm_id_n: 18 });
+    const d = withParams(namedEnds(sheet('otas/inverter-based-ota.json')), { gm_id_n: 18 });
     const res = runSheet(d, table, undefined, REFS);
     const s = res.items?.find(
       (i) => i.kind === 'search' && i.path.length === 0 && i.name === 'I_bias',
@@ -611,7 +625,7 @@ describe('a current balance that gives no number', () => {
 
 describe('a block that is not evaluated', () => {
   it('names what it waits on in its parent’s terms, and the parent resolves it', () => {
-    const d = withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 });
+    const d = withParams(namedEnds(sheet('otas/five-transistor-ota.json')), { CM_dc: 1.75 });
     const res = runSheet(d, table, undefined, REFS);
     const report = res.blocks?.find((b) => b.name === 'tail');
     const own = report?.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
@@ -635,7 +649,7 @@ describe('a block that is not evaluated', () => {
 
 describe('a member of a set whose search failed where the others were held', () => {
   it('fails with its own cause and its set, and the others of the set wait on it', () => {
-    const d = withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 });
+    const d = withParams(namedEnds(sheet('otas/five-transistor-ota.json')), { CM_dc: 1.75 });
     const res = runSheet(d, table, undefined, REFS);
     const search = (n: string): Item | undefined =>
       res.items?.find((i) => i.kind === 'search' && i.path.length === 0 && i.name === n);
@@ -660,7 +674,7 @@ describe('a member of a set whose search failed where the others were held', () 
   });
 
   it('is never read as proof that the design has none', () => {
-    const d = withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 });
+    const d = withParams(namedEnds(sheet('otas/five-transistor-ota.json')), { CM_dc: 1.75 });
     const res = runSheet(d, table, undefined, REFS);
     const tail = res.items?.find((i) => i.name === 'V_tail' && i.status === 'failed');
     if (tail?.status !== 'failed' || tail.cause.kind !== 'no-crossing') return;
@@ -674,7 +688,7 @@ describe('a member of a set whose search failed where the others were held', () 
 
 describe('a search whose relation gives no number where it searched', () => {
   it('cannot be calculated, and names the part read beyond its table', () => {
-    const d = withParams(sheet('otas/five-transistor-ota.json'), { L_in: 5e-6 });
+    const d = withParams(namedEnds(sheet('otas/five-transistor-ota.json')), { L_in: 5e-6 });
     const res = runSheet(d, table, undefined, REFS);
     const failed = (res.items ?? []).filter(
       (i) => i.kind === 'search' && i.path.length === 0 && i.status === 'failed',
@@ -708,7 +722,7 @@ describe('the texts of a search that stopped short, and of a block in its own li
   });
 
   it('names the block, in its own list, as waiting on its parent sheet', () => {
-    const d = withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 });
+    const d = withParams(namedEnds(sheet('otas/five-transistor-ota.json')), { CM_dc: 1.75 });
     const res = runSheet(d, table, undefined, REFS);
     const own = res.blocks
       ?.find((b) => b.name === 'tail')
@@ -775,7 +789,7 @@ describe('a solved param the run held at a given value', () => {
     res.items?.find((i) => i.kind === 'search' && i.path.length === 0 && i.name === name);
 
   it('is ok, marked held with its value and unchecked relation, and the verdict is undetermined', () => {
-    const doc = resolvedSheet(sheet('otas/five-transistor-ota.json'), REFS).doc;
+    const doc = resolvedSheet(namedEnds(sheet('otas/five-transistor-ota.json')), REFS).doc;
     const free = evaluateSheet(doc, table);
     const res = evaluateSheet(doc, table, undefined, { pinned: { V_tail: 0.4 } });
     expect(heldIn(res, 'V_tail')).toEqual({
@@ -795,6 +809,23 @@ describe('a solved param the run held at a given value', () => {
     // The run that solves it reads no held item.
     expect(free.verdict?.held).toBeUndefined();
     expectSame(res);
+  });
+
+  it('runs each range end with the search held, marks it held there, and reads each undetermined', () => {
+    const doc = resolvedSheet(namedEnds(sheet('otas/five-transistor-ota.json')), REFS).doc;
+    const res = evaluateSheet(doc, table, undefined, { pinned: { V_tail: 0.4 } });
+    expect(res.rangeEnds?.length).toBe(2);
+    for (const e of res.rangeEnds ?? []) {
+      expect(e.checks.length).toBeGreaterThan(0);
+      expect(heldIn({ ...res, items: e.items }, 'V_tail')).toMatchObject({
+        status: 'ok',
+        attributes: { kind: 'held', value: 0.4 },
+      });
+      expect(e.verdict).toMatchObject({
+        verdict: 'undetermined',
+        held: [{ kind: 'search', path: [], name: 'V_tail' }],
+      });
+    }
   });
 
   it('decides the verdict ahead of a requirement that fails, on a forced sheet', () => {
@@ -996,7 +1027,7 @@ describe('the data an item carries for its text', () => {
 
   it('a block its parent gives no value names the inputs it waits for', () => {
     const res = runSheet(
-      withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 }),
+      withParams(namedEnds(sheet('otas/five-transistor-ota.json')), { CM_dc: 1.75 }),
       table,
       undefined,
       REFS,
@@ -1021,8 +1052,8 @@ describe('the items of the second audit', () => {
     res.items?.find(
       (i) => i.kind === kind && i.name === name && i.path.join('/') === path.join('/'),
     );
-  const tail = sheet('otas/differential-pair-tail.json');
-  const ota = sheet('otas/five-transistor-ota.json');
+  const tail = namedEnds(sheet('otas/differential-pair-tail.json'));
+  const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
 
   it('keeps two netlist findings on one item, in the order raised', () => {
     const d = clone(tail);
@@ -1113,18 +1144,18 @@ describe('the items of the second audit', () => {
     expectSame(res);
   });
 
-  it('gives a range end one item for an expression that does not parse, and names an undefined name', () => {
+  it('refuses a range end whose expression does not parse, or reads a name that is not typed, with one item', () => {
     const d = clone(ota);
     d.operatingRange![0].set = { CM_dc: '((' };
     const res = lib(d);
+    expect(res.rangeEnds?.[0]).toMatchObject({ state: 'not-run', set: {}, checks: [] });
     expect(res.rangeEnds?.[0].items).toEqual([
       expect.objectContaining({
         status: 'failed',
         cause: expect.objectContaining({
-          kind: 'cannot-evaluate',
+          kind: 'not-read',
           data: expect.objectContaining({
-            why: 'syntax',
-            syntax: { expression: '((', at: 2, problem: 'Unclosed (' },
+            field: expect.objectContaining({ name: 'set', key: 'CM_dc', problem: 'syntax' }),
           }),
         }),
       }),
@@ -1133,10 +1164,60 @@ describe('the items of the second audit', () => {
     const u = clone(ota);
     u.operatingRange![0].set = { CM_dc: 'nonsense_name' };
     const r2 = lib(u);
-    expect(r2.rangeEnds?.[0].items?.[0]).toMatchObject({
-      cause: { kind: 'cannot-evaluate', data: { why: 'not-defined', name: 'nonsense_name' } },
-    });
+    expect(r2.rangeEnds?.[0]).toMatchObject({ state: 'not-run', set: {}, checks: [] });
+    expect(r2.rangeEnds?.[0].items).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        cause: expect.objectContaining({
+          kind: 'not-read',
+          data: expect.objectContaining({
+            where: 'cm-lo',
+            message: expect.stringContaining('"nonsense_name"'),
+          }),
+        }),
+      }),
+    ]);
     expectSame(r2);
+  });
+
+  it('refuses a range end that sets a value from a derived quantity, and leaves the other end as it was', () => {
+    // The equation takes the name of the elementary charge: the end reads the equation.
+    const d = clone(ota);
+    d.equations.push({ name: 'q', expr: 'CM_lo + 0' });
+    d.operatingRange![0].set = { CM_dc: 'q' };
+    const res = lib(d);
+    const plain = lib(clone(ota));
+    const finding = res.warnings.filter((w) => w.rule === 'sheet-range' && w.severity === 'error');
+    expect(finding).toHaveLength(1);
+    expect(finding[0].message).toContain('"q"');
+    expect(finding[0].message).toContain('type the value');
+    expect(res.rangeEnds?.[0]).toMatchObject({
+      name: 'cm-lo',
+      state: 'not-run',
+      set: {},
+      checks: [],
+    });
+    const kept = (e: (typeof res.rangeEnds & object)[number] | undefined) =>
+      e && { state: e.state, set: e.set, checks: e.checks };
+    expect(kept(res.rangeEnds?.[1])).toEqual(kept(plain.rangeEnds?.[1]));
+    expect(res.verdict?.verdict).toBe(plain.verdict?.verdict);
+    expectSame(res);
+  });
+
+  it('refuses a range end whose name is not allowed, with no checks and an empty set', () => {
+    const d = clone(ota);
+    d.operatingRange![0].name = 'cm@lo';
+    const res = lib(d);
+    const plain = lib(clone(ota));
+    expect(res.rangeEnds?.[0]).toMatchObject({ state: 'not-run', set: {}, checks: [] });
+    expect(res.rangeEnds?.[0].items).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        cause: expect.objectContaining({ kind: 'not-read' }),
+      }),
+    ]);
+    expect(res.rangeEnds?.[1]).toEqual(plain.rangeEnds?.[1]);
+    expectSame(res);
   });
 
   it('reads a check with an operator the engine does not know as not read, and keeps today’s field', () => {
@@ -1225,15 +1306,19 @@ describe('the items of the second audit', () => {
       cause: {
         kind: 'cannot-evaluate',
         data: {
-          unevaluable: {
-            at: {
-              where: 'nowhere',
-              by: { kind: 'device', path: ['tail'], name: 'givens' },
-              byCause: { kind: 'cannot-evaluate', data: { sizing: { quantity: 'gm' } } },
-            },
-          },
+          by: { kind: 'device', path: ['tail'], name: 'givens' },
+          unevaluable: { at: { where: 'nowhere' } },
         },
       },
+    });
+    const at =
+      v?.status === 'failed' && 'cause' in v && v.cause.kind === 'cannot-evaluate'
+        ? v.cause.data.unevaluable?.at
+        : undefined;
+    const first = at?.where === 'nowhere' ? at.points[0]?.failed[0] : undefined;
+    expect(first).toMatchObject({
+      ref: { kind: 'device', path: ['tail'], name: 'givens' },
+      cause: { kind: 'cannot-evaluate', data: { sizing: { quantity: 'gm' } } },
     });
     expectSame(ekv);
   });
@@ -1249,10 +1334,24 @@ describe('a search that nothing evaluates, beside a requirement that only fails'
       cause: {
         kind: 'cannot-evaluate',
         data: {
+          by: { kind: 'device', path: ['out'] },
           unevaluable: {
             at: {
-              by: { kind: 'device', path: ['out'] },
-              byCause: { data: { sizing: { quantity: 'gm' } } },
+              where: 'nowhere',
+              points: expect.arrayContaining([
+                expect.objectContaining({
+                  failed: expect.arrayContaining([
+                    expect.objectContaining({
+                      ref: expect.objectContaining({ kind: 'device', path: ['out'] }),
+                      cause: expect.objectContaining({
+                        data: expect.objectContaining({
+                          sizing: expect.objectContaining({ quantity: 'gm' }),
+                        }),
+                      }),
+                    }),
+                  ]),
+                }),
+              ]),
             },
           },
         },
@@ -1263,7 +1362,9 @@ describe('a search that nothing evaluates, beside a requirement that only fails'
   });
 
   it('gives a reference to no sheet the same sentence in the block’s own list', () => {
-    const d = JSON.parse(JSON.stringify(sheet('otas/five-transistor-ota.json'))) as SheetDoc;
+    const d = JSON.parse(
+      JSON.stringify(namedEnds(sheet('otas/five-transistor-ota.json'))),
+    ) as SheetDoc;
     (d.blocks![0] as { ref?: string }).ref = 'nope/nope';
     delete (d.blocks![0] as { doc?: unknown }).doc;
     const res = runSheet(d, table, undefined, REFS);
@@ -1312,7 +1413,7 @@ describe('a placement that is not well formed', () => {
 });
 
 describe('the list of a range end', () => {
-  const ota = sheet('otas/five-transistor-ota.json');
+  const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
   const run = (doc: SheetDoc): SheetResult => runSheet(doc, table, undefined, REFS);
   const top = (items: readonly Item[] | undefined): Item | undefined =>
     items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
@@ -1425,7 +1526,7 @@ describe('the list of a range end', () => {
 });
 
 describe('a range end that is not calculated, in the design point’s terms', () => {
-  const ota = sheet('otas/five-transistor-ota.json');
+  const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
 
   it('waits on a level the design point rests on as assumed', () => {
     const { out: _out, ...levels } = (ota as unknown as { levels: Record<string, string> }).levels;
@@ -1461,7 +1562,7 @@ describe('a range end that is not calculated, in the design point’s terms', ()
 
 describe('the verdict of a sheet whose range end’s own entry failed', () => {
   it('reads the end, names its item with the end’s name, and keeps no copy on the design point', () => {
-    const ota = sheet('otas/five-transistor-ota.json');
+    const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
     const doc: SheetDoc = {
       ...ota,
       checks: ota.checks.map((c) => ({ ...c, kind: 'advisory' })),
@@ -1480,7 +1581,7 @@ describe('the verdict of a sheet whose range end’s own entry failed', () => {
         path: [],
         name: '',
         end: 'cm-lo',
-        cause: expect.objectContaining({ kind: 'cannot-evaluate' }),
+        cause: expect.objectContaining({ kind: 'not-read' }),
       }),
     ]);
     expectSame(res);
@@ -1489,7 +1590,7 @@ describe('the verdict of a sheet whose range end’s own entry failed', () => {
 
 describe('a part whose placement is not well formed', () => {
   it('is that placement’s finding alone, not a part that names no wires', () => {
-    const ota = sheet('otas/five-transistor-ota.json');
+    const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
     const doc = {
       ...ota,
       blocks: ota.blocks?.map((b) => (b.name === 'in' ? { ...b, nodes: 5 } : b)),
@@ -1504,7 +1605,7 @@ describe('a part whose placement is not well formed', () => {
 });
 
 describe('a range end whose own entry is not well formed, or gives no number', () => {
-  const ota = sheet('otas/five-transistor-ota.json');
+  const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
   // Every requirement advisory, so that none fails and decides the verdict.
   const soft: SheetDoc = { ...ota, checks: ota.checks.map((c) => ({ ...c, kind: 'advisory' })) };
   const withSet = (set: Record<string, string>): SheetDoc => ({
@@ -1515,7 +1616,7 @@ describe('a range end whose own entry is not well formed, or gives no number', (
     ['a set that does not parse', { CM_dc: '((' }, false, 'undetermined'],
     ['a set of a name that is not an input', { NOPE: '1' }, false, 'undetermined'],
     ['a set that gives no number at this design', { CM_dc: 'sqrt(0-1)' }, true, 'feasible'],
-    ['a set that reads a name no entry declares', { CM_dc: 'nothing_here' }, true, 'feasible'],
+    ['a set that reads a name no entry declares', { CM_dc: 'nothing_here' }, false, 'undetermined'],
   ];
   for (const [what, set, feasible, verdict] of cases)
     it(`reads ${verdict} where ${what}, with today's feasibility the same`, () => {
@@ -1533,7 +1634,7 @@ describe('a range end whose own entry is not well formed, or gives no number', (
 
 describe('a level that cannot hold a wire', () => {
   it('says why, as validation found it', () => {
-    const ota = sheet('otas/five-transistor-ota.json');
+    const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
     const doc = {
       ...ota,
       params: ota.params.map((p) => (p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p)),
@@ -1553,7 +1654,7 @@ describe('a level that cannot hold a wire', () => {
   });
 
   it('gives one reason for each name the level itself reads, and follows only an alias', () => {
-    const base = sheet('otas/five-transistor-ota.json');
+    const base = namedEnds(sheet('otas/five-transistor-ota.json'));
     const ota = resolvedSheet(
       {
         ...base,
@@ -1603,7 +1704,7 @@ describe('a level that cannot hold a wire', () => {
 
 describe('a wiring fault of a part', () => {
   it('is a finding of the netlist of the sheet that wires it, on that sheet’s own item', () => {
-    const ota = sheet('otas/five-transistor-ota.json');
+    const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
     const doc = {
       ...ota,
       blocks: ota.blocks?.map((b) =>
@@ -1644,7 +1745,7 @@ describe('a wiring fault of a part', () => {
   });
 
   it('puts a short and a diode flag its wires contradict on the sheet that wires the part', () => {
-    const ota = sheet('otas/five-transistor-ota.json');
+    const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
     const run = (doc: SheetDoc) => {
       const res = runSheet(doc, table, undefined, REFS);
       const sheets = (res.items ?? []).filter((i) => i.kind === 'sheet' && i.status === 'failed');
@@ -1697,7 +1798,7 @@ describe('a wiring fault of a part', () => {
 
 describe('a range end behind a level that cannot hold a wire', () => {
   const endLines = (level: string, assumed = false): readonly string[] => {
-    const ota = sheet('otas/five-transistor-ota.json');
+    const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
     const doc = {
       ...ota,
       levels: { ...(ota as { levels?: object }).levels, out: level },
@@ -1734,8 +1835,9 @@ describe('a level that reads a param a range end substitutes', () => {
     // The five-transistor OTA holds wire vdd at VDD. A range end that sets VDD to an expression
     // is evaluated on the finished design, where its substitute is a number: the level is still
     // the designer's, whatever the substitute reads (a loop through VDD itself, a solved param,
-    // an equation, a device quantity, or a number).
-    const ota = sheet('otas/five-transistor-ota.json');
+    // an equation, a device quantity, or a number). A set that reads anything but numbers,
+    // constants and typed params is refused on its own entry, and that end is not run.
+    const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
     for (const set of ['VDD*0.9', 'V_tail + 1.2', 'CM_in + 1.0', 'in__vgs', '1.62']) {
       const doc = {
         ...ota,
@@ -1751,7 +1853,9 @@ describe('a level that reads a param a range end substitutes', () => {
         ),
         set,
       ).toEqual([]);
-      expect(res.rangeEnds?.find((e) => e.name === 'vdd-lo')?.verdict, set).toBeDefined();
+      const end = res.rangeEnds?.find((e) => e.name === 'vdd-lo');
+      if (setReads(doc, set).length) expect(end?.state, set).toBe('not-run');
+      else expect(end?.verdict, set).toBeDefined();
       expectSame(res);
     }
   });
@@ -1854,7 +1958,7 @@ describe('the words of the verdicts, from one table', () => {
 
 describe('a solved value that is also marked with a class', () => {
   it('names the class and the constraint, and how to fix it', () => {
-    const d = sheet('otas/five-transistor-ota.json');
+    const d = namedEnds(sheet('otas/five-transistor-ota.json'));
     const doc = {
       ...d,
       params: d.params.map((p) => (p.name === 'V_tail' ? { ...p, class: 'assumed' } : p)),
@@ -1966,7 +2070,7 @@ describe('a block’s list is the run’s list under its path, so its verdict sa
     ...d,
     blocks: d.blocks?.map((b) => (b.name === name ? f(b) : b)),
   });
-  const ota = sheet('otas/five-transistor-ota.json');
+  const ota = namedEnds(sheet('otas/five-transistor-ota.json'));
   const refs = (res: SheetResult, path: string[]) =>
     blockOf(res, path)?.verdict?.failed.map((f) => [f.kind, [...f.path, f.name].join('.')]);
 
@@ -2026,8 +2130,8 @@ describe('a block’s list is the run’s list under its path, so its verdict sa
 
   it('a block at a range end reads the held design’s verdict, never the design word', () => {
     const runs = [
-      runSheet(sheet('otas/degenerated-differential-pair.json'), table, undefined, REFS),
-      runSheet(sheet('otas/gain-boosted-cascode-ota.json'), table, undefined, REFS),
+      runSheet(namedEnds(sheet('otas/degenerated-differential-pair.json')), table, undefined, REFS),
+      runSheet(namedEnds(sheet('otas/gain-boosted-cascode-ota.json')), table, undefined, REFS),
     ];
     const words = new Set<string>();
     for (const res of runs)

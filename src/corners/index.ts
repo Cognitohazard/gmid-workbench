@@ -105,9 +105,16 @@ import {
   withoutRange,
   validateSheet,
 } from '../sheet';
-import { isHardCheck } from '../sheet/types';
-import { incompleteOn, isComplete, marginReadable, type Item, type ItemRef } from '../sheet/states';
-import { withFindings } from '../sheet/items';
+import { isHardCheck, rangePoints, type CornerKey, type RangePoint } from '../sheet/types';
+import {
+  hasDesign,
+  incompleteOn,
+  isComplete,
+  marginReadable,
+  type Item,
+  type ItemRef,
+} from '../sheet/states';
+import { notCalculated, withFindings } from '../sheet/items';
 import {
   assumedLevelRefusal,
   holdHardware,
@@ -550,8 +557,9 @@ export type ConditionIssueKind =
  *  - `runtime-evaluation`: the run did not complete; `on` is the failed items whose number is not
  *    there (incompleteOn). Its text is the items' own.
  *  - `no-design`: there is no design to hold. `reason: 'no-base'` — several conditions are asked
- *    about and none is the one the design is sized at; `'base-not-evaluated'` — the design was not
- *    evaluated at `base`, where it is sized.
+ *    about and none is the one the design is sized at; `'no-design-at-base'` — the run at `base`,
+ *    where the design is sized, gives no design (hasDesign); `on` is each item it rests on, the
+ *    pointers a range end not calculated carries (notCalculated).
  *  - `assumed-level`: the design rests on the levels `names`, classed assumed.
  */
 export type ConditionIssue = { readonly message: string } & (
@@ -568,14 +576,20 @@ export type ConditionIssue = { readonly message: string } & (
   | { readonly kind: 'no-design'; readonly reason: 'no-base' }
   | {
       readonly kind: 'no-design';
-      readonly reason: 'base-not-evaluated';
+      readonly reason: 'no-design-at-base';
       readonly base: ConditionKey;
+      readonly on: readonly ItemRef[];
     }
   | { readonly kind: 'assumed-level'; readonly names: readonly ItemRef[] }
 );
 
 /** An item's reference, without its status. */
 const refOf = (i: ItemRef): ItemRef => ({ kind: i.kind, path: i.path, name: i.name });
+
+/** The items a run with no design rests on: the pointers of the list a range end not calculated
+ *  carries (notCalculated), so the condition and the end name the same items. */
+const designOn = (items: readonly Item[]): ItemRef[] =>
+  notCalculated(items).flatMap((i) => (i.status === 'withheld' ? i.on.map(refOf) : []));
 
 /** A value named with its block path (`stage1.V_out`) as the reference of its item. */
 function valueRef(qualified: string): ItemRef {
@@ -594,6 +608,9 @@ function valueRef(qualified: string): ItemRef {
 export interface CompliancePoint {
   /** The range end's name. Absent at the centre. */
   readonly rangeEnd?: string;
+  /** At a corner of the operating axes, the end of each axis and its value there, in axis order
+   *  (RangeEndReport.corner). */
+  readonly corner?: CornerKey;
   readonly state: PointState;
   /** Why the point has no check outcomes to read, when it has none: the refusal, the solver's
    *  message, the table's reach. Absent where the point's checks were measured — a point that
@@ -646,8 +663,10 @@ export type ConditionRun =
       /** Kept when an evaluation ran and did not stand, so its diagnostics survive the
        *  refusal — the numbers are how an author finds out why. */
       readonly result?: SheetResult;
-      /** On a condition declined because the sheet does not validate: the sheet's item list built
-       *  from validation's findings (withFindings), which the issues point into. */
+      /** The item list the issues point into: on a condition declined because the sheet does not
+       *  validate, the list validation's findings make (withFindings); on one declined after the
+       *  design point ran (it has no design, or it rests on an assumed level), the design point's
+       *  list. */
       readonly items?: readonly Item[];
       /** On a condition asked about and declined with no answer, before anything ran: the DC
        *  wiring report saying the check did not run (see unwalkedReport), as a range end declined
@@ -870,13 +889,14 @@ function runSet(
     key: ConditionKey,
     state: 'not-run' | 'no-answer',
     issue: ConditionIssue,
+    pointed?: readonly Item[],
   ): ConditionRun => {
     const here = prepared.blockers.length
       ? prepared.blockers
       : preflightBindings(prepared.bindings, primaryDevice, key, deviceOf).issues;
     return here.length
       ? refused(prepared, key, 'held', 'not-run', here)
-      : refused(prepared, key, 'held', state, [issue]);
+      : refused(prepared, key, 'held', state, [issue], pointed);
   };
   const at = base ?? (keys.length === 1 ? keys[0] : undefined);
   if (at === undefined)
@@ -909,14 +929,16 @@ function runSet(
   // declined (`no-answer`).
   let held: HeldHardware | undefined;
   let refusal: { state: 'not-run' | 'no-answer'; issue: ConditionIssue } | undefined;
-  if (sized.state !== 'evaluated')
+  const sizedItems = sized.result?.items;
+  if (!sizedItems || !hasDesign(sizedItems))
     refusal = {
       state: 'not-run',
       issue: {
         kind: 'no-design',
-        reason: 'base-not-evaluated',
+        reason: 'no-design-at-base',
         base: at,
-        message: `the design was not evaluated at ${conditionLabelIn(primaryDevice, at)}, where it is sized, so there is nothing to hold here`,
+        on: sizedItems ? designOn(sizedItems) : [],
+        message: `the design point has no design at ${conditionLabelIn(primaryDevice, at)}, where it is sized, so there is nothing to hold here`,
       },
     };
   else if (prepared.assumptions.length)
@@ -933,7 +955,7 @@ function runSet(
   return asked.map((key): ConditionRun => {
     if (sameCondition(key, at)) return sized;
     if (!refusal) return runPrepared(prepared, primaryDevice, key, deviceOf, held, settings);
-    return declined(key, refusal.state, refusal.issue);
+    return declined(key, refusal.state, refusal.issue, sizedItems);
   });
 }
 
@@ -1007,13 +1029,16 @@ export function sweepAtCondition(
   };
   // An edge is pinned with the sweep's own sample, less the range ends: passing — feasible where
   // the design is sized, complying at the condition's own point where it is held — never reads them.
+  // Not checked (SweepOptions.range), the samples do not read them either.
+  const range = opts.range ?? 'not-checked';
   const sweep = sweepOf(
-    doc,
+    range === 'checked' ? doc : withoutRange(doc),
     param,
     opts.points ?? SWEEP_POINTS,
     refs,
     sample,
     opts.windows ? (d) => sample(withoutRange(d)) : undefined,
+    range,
   );
   return { ...sweep, key, base, design };
 }
@@ -1026,25 +1051,29 @@ function refused(
   design: 'sized' | 'held',
   state: 'not-run' | 'no-answer',
   issues: readonly ConditionIssue[],
+  pointed?: readonly Item[],
 ): ConditionRun {
   const error = issues[0]?.message;
-  const point = (limit?: string): CompliancePoint => ({
-    ...(limit === undefined ? {} : { rangeEnd: limit }),
+  const items =
+    prepared.items && issues.some((i) => i.kind === 'invalid-sheet-or-ref')
+      ? prepared.items
+      : pointed;
+  const point = (end?: RangePoint): CompliancePoint => ({
+    ...(end === undefined ? {} : { rangeEnd: end.name }),
+    ...(end?.corner ? { corner: end.corner } : {}),
     state,
     ...(error === undefined ? {} : { error }),
   });
-  const ends = Array.isArray(prepared.doc.operatingRange) ? prepared.doc.operatingRange : [];
+  const ends = rangePoints(prepared.doc);
   const nodes = state === 'no-answer' ? unwalkedReport(prepared.doc) : undefined;
   return {
     state: 'not-evaluated',
     key,
     design,
     issues,
-    points: [point(), ...ends.map((e) => point(e.name))],
+    points: [point(), ...ends.map((e) => point(e))],
     ...(nodes ? { nodes } : {}),
-    ...(prepared.items && issues.some((i) => i.kind === 'invalid-sheet-or-ref')
-      ? { items: prepared.items }
-      : {}),
+    ...(items ? { items } : {}),
   };
 }
 
@@ -1122,6 +1151,7 @@ function runPrepared(
     centre,
     ...(result.rangeEnds ?? []).map((e): CompliancePoint => ({
       rangeEnd: e.name,
+      ...(e.corner ? { corner: e.corner } : {}),
       state: e.state,
       ...(e.error === undefined ? {} : { error: e.error }),
       ...(e.outside ? { outside: e.outside } : {}),

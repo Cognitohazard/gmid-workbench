@@ -971,9 +971,9 @@ describe('a point with no answer is not walked', () => {
     expect(wiring(r)).toEqual([]);
   });
 
-  it('leaves the library ends that have no answer unwalked: the current-mirror OTA at cm-hi', () => {
+  it('leaves the library ends that have no answer unwalked: the current-mirror OTA at the high CM_dc end', () => {
     const r = runSheet(librarySheet('otas/current-mirror-ota.json'), libraryTable, undefined, REFS);
-    const hi = r.rangeEnds!.find((e) => e.name === 'cm-hi')!;
+    const hi = r.rangeEnds!.find((e) => e.name === 'CM_dc=hi')!;
     expect(hi.state).toBe('no-answer');
     expect(hi.nodes?.state).toBe('not-evaluated');
     expect(wiring(hi)).toEqual([]);
