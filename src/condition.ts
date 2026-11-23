@@ -24,6 +24,19 @@ export const DEFAULT_DIMENSIONS: readonly ConditionDimension[] = [
  *  dimension. */
 export const dimensionName = (name: string): string => name.trim().toLowerCase();
 
+/** A condition's value in one dimension, by name as keys compare it, in its source spelling. */
+export function valueIn(cond: ConditionKey, name: string): ConditionValue | undefined {
+  for (const [n, v] of Object.entries(cond)) if (dimensionName(n) === name) return v;
+  return undefined;
+}
+
+/** One dimension of a condition as a display identity writes it: the corner as its file spells
+ *  it, the temperature with its unit (`27°C`), any other dimension as `name value`. */
+export function conditionPart(name: string, v: ConditionValue): string {
+  const n = dimensionName(name);
+  return n === 'corner' ? String(v) : n === 'temp' ? `${v}°C` : `${name} ${v}`;
+}
+
 /**
  * The condition a table's identity holds, as its file spelled it — the ONE reader of both
  * identity shapes: a table imported now carries `condition`; one stored before conditions were

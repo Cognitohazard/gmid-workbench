@@ -147,8 +147,11 @@ describe('a dimension the designer adds', () => {
       dimensions: CORNER_TEMP_VDD,
     });
     expect(conditionOf(table.id)).toEqual({ corner: 'tt', temp: 27 });
-    const missing = warnings.filter((w) => w.startsWith('no-condition-value'));
+    const missing = warnings.filter((w) => w.startsWith('condition-left-out'));
     expect(missing).toHaveLength(1);
+    expect(table.meta.unset).toEqual(['vdd']);
+    // A table restored from storage is validated again and still says so.
+    expect(validate(table).filter((w) => w.rule === 'condition-left-out')).toHaveLength(1);
     expect(missing[0]).toContain('n_tt.csv');
     expect(missing[0]).toContain('vdd');
     const [d] = groupDevices([table]);
@@ -171,11 +174,39 @@ describe('a dimension the designer adds', () => {
       [{ name: 'Device', kind: 'text' }],
       [{ name: ' ', kind: 'text' }],
       [VDD, { name: 'VDD', kind: 'number' }],
+      [{ name: 'temp', kind: 'text' }],
+      [{ name: 'Temp', kind: 'number', fill: 25 }],
     ] as ConditionDimension[][]) {
       const r = importMostab(file({ device: 'n' }), { dimensions });
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.errors.map((e) => e.kind)).toEqual(['bad-dimension']);
     }
+  });
+});
+
+describe('a value the import cannot read', () => {
+  const refused = (text: string, hints: ImportHints): string[] => {
+    const r = importMostab(text, hints);
+    expect(r.ok).toBe(false);
+    return r.ok ? [] : r.errors.map((e) => `${e.kind}: ${e.message}`);
+  };
+
+  it('refuses a hint for a dimension the import does not declare', () => {
+    const [e] = refused(file({ device: 'n' }), { condition: { vdd: 1.8 } });
+    expect(e).toMatch(/^bad-dimension: .*vdd/);
+  });
+
+  it('refuses a hint whose value the dimension cannot read', () => {
+    const [e] = refused(file({ device: 'n' }), {
+      dimensions: CORNER_TEMP_VDD,
+      condition: { vdd: 'high' },
+    });
+    expect(e).toMatch(/^bad-dimension: .*vdd.*high/);
+  });
+
+  it('refuses a header whose value the dimension cannot read, naming the header', () => {
+    const [e] = refused(file({ device: 'n', vdd: '1.8V' }), { dimensions: CORNER_TEMP_VDD });
+    expect(e).toMatch(/^bad-dimension: .*# vdd: 1\.8V/);
   });
 });
 

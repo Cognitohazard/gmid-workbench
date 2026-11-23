@@ -12,6 +12,7 @@ import {
   conditionKeyId,
   conditionKeyOf,
   conditionOf,
+  conditionPart,
   type ConditionKey,
   sanitizeSheet as loadSheet,
 } from '@gmid/mostab-core';
@@ -116,9 +117,7 @@ export function deviceKey(t: DeviceTable): string {
     filled.includes(field) ? `${text} (assumed)` : text;
   return [
     mark('device', t.id.device),
-    ...Object.entries(conditionOf(t.id)).map(([name, v]) =>
-      mark(name, name === 'corner' ? String(v) : name === 'temp' ? `${v}°C` : `${name} ${v}`),
-    ),
+    ...Object.entries(conditionOf(t.id)).map(([name, v]) => mark(name, conditionPart(name, v))),
   ].join(' · ');
 }
 
@@ -134,14 +133,12 @@ function identityText(t: DeviceTable): { mixed: string; label: string } {
     const rest = byName.filter(([n]) => n !== 'corner' && n !== 'temp');
     return {
       mixed: `${device}|${corner}|${temp}|${rest.length ? `${JSON.stringify(rest)}|` : ''}`,
-      label: [`${device} · ${corner} · ${temp}°C`, ...rest.map(([n, v]) => `${n} ${v}`)].join(
-        ' · ',
-      ),
+      label: [device, ...byName.map(([n, v]) => conditionPart(n, v))].join(' · '),
     };
   }
   return {
     mixed: `${device}|${JSON.stringify(byName)}|`,
-    label: [device, ...byName.map(([n, v]) => `${n} ${v}`)].join(' · '),
+    label: [device, ...byName.map(([n, v]) => conditionPart(n, v))].join(' · '),
   };
 }
 
@@ -232,7 +229,10 @@ export function sanitizeConditionKeys(v: unknown): ConditionKey[] {
   const seen = new Set<string>();
   for (const raw of v) {
     if (!raw || typeof raw !== 'object') continue;
-    const entries = Object.entries(raw as Record<string, unknown>);
+    // A table's device is never a dimension of its condition.
+    const entries = Object.entries(raw as Record<string, unknown>).filter(
+      ([n]) => n.trim().toLowerCase() !== 'device',
+    );
     if (
       !entries.length ||
       !entries.every(

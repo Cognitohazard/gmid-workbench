@@ -37,7 +37,6 @@
 import type {
   ConditionDimension,
   ConditionKey,
-  ConditionValue,
   DeviceTable,
   OutsideTable,
   QAWarning,
@@ -49,6 +48,7 @@ export type { ConditionDimension, ConditionKey, ConditionValue } from '../types'
 export {
   DEFAULT_DIMENSIONS,
   conditionKeyId,
+  conditionPart,
   conditionKeyOf,
   conditionOf,
   dimensionName,
@@ -63,6 +63,7 @@ import {
   dimensionName,
   isTableId,
   sameCondition,
+  valueIn,
 } from '../condition';
 import type {
   CheckKind,
@@ -119,12 +120,6 @@ import { unwalkedReport } from '../sheet/nodes';
 
 const isTable = (of: TableId | ConditionKey | DeviceTable): of is DeviceTable =>
   'grid' in of && typeof of.grid === 'object' && of.grid !== null;
-
-/** A condition's value in one dimension, by name as keys compare it, in its source spelling. */
-function valueIn(cond: ConditionKey, name: string): ConditionValue | undefined {
-  for (const [n, v] of Object.entries(cond)) if (dimensionName(n) === name) return v;
-  return undefined;
-}
 
 /**
  * The condition as a designer writes it: source spelling preserved, and the temperature elided at

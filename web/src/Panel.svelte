@@ -15,6 +15,7 @@
     noiseSource,
     readsGamma,
     tableFallbacks,
+    conditionPart,
     type DeviceTable,
     type OverlayCurvesXY,
     type OverlayLine,
@@ -248,7 +249,7 @@
       for (const n of vary.dims) {
         const v = i.cond[n];
         if (v === undefined || v === '') continue;
-        parts.push(n === 'corner' ? String(v) : n === 'temp' ? `${v}°C` : `${n} ${v}`);
+        parts.push(conditionPart(n, v));
       }
       return parts.length ? parts.join(' ') : i.device;
     };

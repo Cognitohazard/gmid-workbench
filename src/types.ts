@@ -54,6 +54,9 @@ export interface TableMeta {
    * Absent when nothing was filled in.
    */
   readonly filled?: readonly FilledField[];
+  /** The condition dimensions of the import that the file did not declare and that have no fill,
+   *  so the table's condition leaves them out and QA warns. Absent when none was left out. */
+  readonly unset?: readonly string[];
   /** Extra scalar metadata carried through verbatim (the strict-superset pass-through rule). A
    *  recognized header whose value could not be read (`# temp: 27C`) is kept here as written,
    *  under its own key, and QA names it. */

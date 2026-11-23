@@ -756,7 +756,12 @@ export function validate(table: DeviceTable): QAWarning[] {
     });
   }
 
-  out.push(...filledFindings(table), ...unreadableHeaders(table), ...idSign(table));
+  out.push(
+    ...filledFindings(table),
+    ...unsetFindings(table),
+    ...unreadableHeaders(table),
+    ...idSign(table),
+  );
   return out;
 }
 
@@ -832,6 +837,20 @@ const notChecked = (check: string, column: string, why: string): QAWarning => ({
 const ASSUMED_TEMP_CONSEQUENCE =
   `kT (the thermal noise, the γ read back from sth, kT/C), the gm/ID ceiling checked here and ` +
   `the condition it is grouped and labelled under all assume it, and every sizing on it says so`;
+
+/** The condition dimensions the importer left out of the table's condition (TableMeta.unset),
+ *  one warning each: the table matches only a condition that has no value for that dimension. */
+function unsetFindings(table: DeviceTable): QAWarning[] {
+  return (table.meta.unset ?? []).map((name) => ({
+    rule: 'condition-left-out',
+    severity: 'warning',
+    message:
+      `the table of ${table.id.device} declares no ${name} (# ${name}:) and its import gives ` +
+      `that condition dimension no fill, so its condition leaves ${name} out: it matches only ` +
+      `a condition that has no ${name} either`,
+    location: name,
+  }));
+}
 
 /**
  * The identity fields the importer filled in (TableMeta.filled), one information finding each.

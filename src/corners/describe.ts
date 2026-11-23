@@ -44,6 +44,7 @@ import {
   type ConditionKey,
   type ConditionRun,
 } from './index';
+import { valueIn } from '../condition';
 
 /** Sentences, and the notes of the conditions they name (conditionNote), kept apart so a reader
  *  can show each note once. */
@@ -66,10 +67,6 @@ const memberAt = (device: CharacterizedDevice | undefined, key: ConditionKey) =>
   const at = conditionKeyOf(key);
   return device?.conditions.find((m) => sameCondition(conditionKeyOf(m.id), at));
 };
-
-/** A condition's value in one dimension (by name as keys compare it), as its source spells it. */
-const valueIn = (cond: ConditionKey, name: string) =>
-  Object.entries(cond).find(([n]) => dimensionName(n) === name)?.[1];
 
 /**
  * A condition in words: the corner as the file spells it, a space, the temperature ("ss 125 °C",

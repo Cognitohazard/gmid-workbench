@@ -8,7 +8,7 @@
 // and raises no sign warnings; an UNDECLARED signed dump stays signed and QA warns.
 // Pure, deterministic, zero DOM imports.
 
-import type { ImportError, ImportHints, ImportResult } from '../types';
+import type { ImportError, ImportHints, ImportResult, QAWarning } from '../types';
 import { mostabHeaderKeys, parseMostabCsv } from '../parse';
 import { REQUIRED_KEYS } from '../namespace';
 import { canonicalizeTable, validate } from '../qa';
@@ -54,6 +54,11 @@ export function importMostab(input: string | Uint8Array, hints?: ImportHints): I
   );
   if (errors.length) return { ok: false, errors };
 
-  const warnings = [...parsed.dataset.warnings, ...tables.flatMap((t) => validate(t))];
+  // A dimension left out of a condition is a fact about the file, so its warning names the file.
+  const named = (w: QAWarning): QAWarning =>
+    w.rule === 'condition-left-out' && hints?.filename
+      ? { ...w, message: `${hints.filename}: ${w.message}` }
+      : w;
+  const warnings = [...parsed.dataset.warnings, ...tables.flatMap((t) => validate(t).map(named))];
   return { ok: true, dataset: { tables, warnings } };
 }
