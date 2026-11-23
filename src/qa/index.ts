@@ -6,6 +6,7 @@
 
 import type { Axis, DeviceTable, Grid, Polarity, QAWarning, TableMeta } from '../types';
 import type { CharacterizedDevice } from '../corners';
+import { conditionOf, tableTempC } from '../condition';
 import {
   axisSignature,
   extraScalar,
@@ -319,7 +320,7 @@ export function validate(table: DeviceTable): QAWarning[] {
   if (gm && id) {
     // Scale both 27 °C anchors by this table's temperature (1/U_T ∝ 1/T): rises
     // when colder, falls when hotter, and their ratio is preserved automatically.
-    const tempC = table.meta.temp ?? DEFAULT_TEMP_C;
+    const tempC = tableTempC(table);
     // A temperature the table did not declare is the default, and the finding says so: a cold
     // characterization read at 27 °C can sit past these limits and be valid data.
     const assumed = table.meta.filled?.includes('temp') ?? false;
@@ -755,7 +756,12 @@ export function validate(table: DeviceTable): QAWarning[] {
     });
   }
 
-  out.push(...filledFindings(table), ...unreadableHeaders(table), ...idSign(table));
+  out.push(
+    ...filledFindings(table),
+    ...unsetFindings(table),
+    ...unreadableHeaders(table),
+    ...idSign(table),
+  );
   return out;
 }
 
@@ -832,6 +838,20 @@ const ASSUMED_TEMP_CONSEQUENCE =
   `kT (the thermal noise, the γ read back from sth, kT/C), the gm/ID ceiling checked here and ` +
   `the condition it is grouped and labelled under all assume it, and every sizing on it says so`;
 
+/** The condition dimensions the importer left out of the table's condition (TableMeta.unset),
+ *  one warning each: the table matches only a condition that has no value for that dimension. */
+function unsetFindings(table: DeviceTable): QAWarning[] {
+  return (table.meta.unset ?? []).map((name) => ({
+    rule: 'condition-left-out',
+    severity: 'warning',
+    message:
+      `the table of ${table.id.device} declares no ${name} (# ${name}:) and its import gives ` +
+      `that condition dimension no fill, so its condition leaves ${name} out: it matches only ` +
+      `a condition that has no ${name} either`,
+    location: name,
+  }));
+}
+
 /**
  * The identity fields the importer filled in (TableMeta.filled), one information finding each.
  * A filled-in field reads like a declared one wherever the table's identity is read, so this is
@@ -850,7 +870,7 @@ function filledFindings(table: DeviceTable): QAWarning[] {
               severity: 'info',
               message:
                 `the table declares no temperature (# temp:), so it is read at ` +
-                `${table.id.temp} °C: ${ASSUMED_TEMP_CONSEQUENCE}`,
+                `${tableTempC(table)} °C: ${ASSUMED_TEMP_CONSEQUENCE}`,
               location: 'temp',
             },
           ];
@@ -860,12 +880,28 @@ function filledFindings(table: DeviceTable): QAWarning[] {
           rule: 'no-corner',
           severity: 'info',
           message:
-            `the table declares no corner (# corner:), so it is taken as "${table.id.corner}": ` +
+            `the table declares no corner (# corner:), so it is taken as "${String(conditionOf(table.id).corner)}": ` +
             `it is grouped and labelled as that condition of its device, every sizing on it says ` +
             `so, and it is the automatic nominal only when no condition of its device is declared`,
           location: 'corner',
         },
       ];
+    if (field !== 'device') {
+      const value = conditionOf(table.id)[field];
+      return value === undefined
+        ? []
+        : [
+            {
+              rule: 'no-condition-value',
+              severity: 'info',
+              message:
+                `the table declares no ${field} (# ${field}:), so it is taken as ${String(value)}, ` +
+                `the fill its import declares for that condition dimension: it is grouped and ` +
+                `labelled as that condition of its device, and every sizing on it says so`,
+              location: field,
+            },
+          ];
+    }
     return [
       {
         rule: 'no-device',

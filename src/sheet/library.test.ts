@@ -372,7 +372,7 @@ describe('sheet library: vetting lints', () => {
     // sized; 70 % keeps every device on the table.)
     const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
-      id: { ...t.id, corner, temp },
+      id: { device: t.id.device, condition: { corner, temp } },
     });
     const weak = scaleQuantities(table, { id: 0.7, gm: 0.7 });
     const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);
@@ -961,7 +961,7 @@ describe('sheet library: the cascode bias lines are drawn', () => {
     // currents there too, so their gates move, and the nodes under them are solved again.
     const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
-      id: { ...t.id, corner, temp },
+      id: { device: t.id.device, condition: { corner, temp } },
     });
     const weak = scaleQuantities(table, { id: 0.8, gm: 0.8 });
     const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);
@@ -1528,7 +1528,7 @@ describe('exemplar goldens: 5T OTA', () => {
     // (scaling the current column by a constant leaves its (VA + vds) dependence alone).
     const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
-      id: { ...t.id, corner, temp },
+      id: { device: t.id.device, condition: { corner, temp } },
     });
     const weak = scaleQuantities(table, { id: 0.7, gm: 0.7 });
     const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);

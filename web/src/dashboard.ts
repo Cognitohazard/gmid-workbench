@@ -10,7 +10,9 @@ import {
   type DeviceTable,
   type SheetDoc,
   conditionKeyId,
-  conditionKeyOf,
+  sanitizeConditionKey,
+  conditionOf,
+  conditionPart,
   type ConditionKey,
   sanitizeSheet as loadSheet,
 } from '@gmid/mostab-core';
@@ -111,13 +113,33 @@ export function reduceForSizing(
  *  metadata-less or same-corner imports can collide), so it is for DISPLAY only. */
 export function deviceKey(t: DeviceTable): string {
   const filled = t.meta.filled ?? [];
-  const mark = (field: 'device' | 'corner' | 'temp', text: string): string =>
+  const mark = (field: string, text: string): string =>
     filled.includes(field) ? `${text} (assumed)` : text;
   return [
     mark('device', t.id.device),
-    mark('corner', t.id.corner),
-    mark('temp', `${t.id.temp}°C`),
+    ...Object.entries(conditionOf(t.id)).map(([name, v]) => mark(name, conditionPart(name, v))),
   ].join(' · ');
+}
+
+/** A table's identity as its uid spells it. A condition with a text corner and a numeric
+ *  temperature spells them exactly as uids did before conditions were records, so a stored table
+ *  keeps its uid; any other dimension is appended, in name order, only when present. A condition
+ *  without both spells all its entries, in name order, as JSON. */
+function identityText(t: DeviceTable): { mixed: string; label: string } {
+  const device = t.id.device;
+  const byName = Object.entries(conditionOf(t.id)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const { corner, temp } = conditionOf(t.id);
+  if (typeof corner === 'string' && typeof temp === 'number') {
+    const rest = byName.filter(([n]) => n !== 'corner' && n !== 'temp');
+    return {
+      mixed: `${device}|${corner}|${temp}|${rest.length ? `${JSON.stringify(rest)}|` : ''}`,
+      label: [device, ...byName.map(([n, v]) => conditionPart(n, v))].join(' · '),
+    };
+  }
+  return {
+    mixed: `${device}|${JSON.stringify(byName)}|`,
+    label: [device, ...byName.map(([n, v]) => conditionPart(n, v))].join(' · '),
+  };
 }
 
 /**
@@ -162,7 +184,8 @@ export function tableUid(t: DeviceTable): string {
   // which device QA reports as a duplicate. In one selection the import says which file of two
   // holding one table it set aside.
   const { filled: _filled, ...meta } = t.meta;
-  mix(`${t.id.device}|${t.id.corner}|${t.id.temp}|${JSON.stringify(meta)}`);
+  const identity = identityText(t);
+  mix(`${identity.mixed}${JSON.stringify(meta)}`);
   for (const a of t.grid.axes) {
     mix(`${a.name}:${a.values.length}`);
     mixData(a.values);
@@ -172,7 +195,7 @@ export function tableUid(t: DeviceTable): string {
     mixData(col);
   }
   // The label part is the bare identity, never deviceKey's marked one: a uid is a stored key.
-  const uid = `${t.id.device} · ${t.id.corner} · ${t.id.temp}°C#${(h >>> 0).toString(36)}`;
+  const uid = `${identity.label}#${(h >>> 0).toString(36)}`;
   uidMemo.set(t, uid);
   return uid;
 }
@@ -205,11 +228,8 @@ export function sanitizeConditionKeys(v: unknown): ConditionKey[] {
   const out: ConditionKey[] = [];
   const seen = new Set<string>();
   for (const raw of v) {
-    if (!raw || typeof raw !== 'object') continue;
-    const o = raw as Record<string, unknown>;
-    if (typeof o.corner !== 'string' || typeof o.temp !== 'number' || !Number.isFinite(o.temp))
-      continue;
-    const key = conditionKeyOf({ device: '', corner: o.corner, temp: o.temp });
+    const key = sanitizeConditionKey(raw);
+    if (!key) continue;
     const id = conditionKeyId(key);
     if (seen.has(id)) continue;
     seen.add(id);

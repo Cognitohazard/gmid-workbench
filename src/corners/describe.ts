@@ -34,7 +34,10 @@ import {
 } from '../sheet/describe';
 import type { DesignVerdict, HeldVerdict, Item, ItemRef, Verdict } from '../sheet/states';
 import {
+  conditionKeyId,
   conditionKeyOf,
+  conditionOf,
+  dimensionName,
   sameCondition,
   type CharacterizedDevice,
   type CheckWorstPoint,
@@ -44,6 +47,7 @@ import {
   type ConditionKey,
   type ConditionRun,
 } from './index';
+import { valueIn } from '../condition';
 
 /** Sentences, and the notes of the conditions they name (conditionNote), kept apart so a reader
  *  can show each note once. */
@@ -62,30 +66,40 @@ const distinct = (ls: readonly Line[]): Line[] =>
 const celsius = (temp: number): string => `${String(temp).replace('-', '−')} °C`;
 
 /** The member of `device` at `key`, whose table's record says what its file declared. */
-const memberAt = (
-  device: CharacterizedDevice | undefined,
-  key: { readonly corner: string; readonly temp: number },
-) => {
+const memberAt = (device: CharacterizedDevice | undefined, key: ConditionKey) => {
   const at = conditionKeyOf(key);
   return device?.conditions.find((m) => sameCondition(conditionKeyOf(m.id), at));
 };
 
 /**
  * A condition in words: the corner as the file spells it, a space, the temperature ("ss 125 °C",
- * "ss −40 °C"). A condition with no corner reads its temperature alone, and one with no finite
- * temperature its corner alone. What the file did not declare is not marked here: it is the
- * condition's note (conditionNote), which every sentence naming the condition returns.
+ * "ss −40 °C"), then any other dimension as its name and value ("tt 27 °C vdd 1.62"). A condition
+ * with no corner reads its temperature alone, and one with no finite temperature its corner
+ * alone. What the file did not declare is not marked here: it is the condition's note
+ * (conditionNote), which every sentence naming the condition returns.
  */
-export function conditionWords(
-  device: CharacterizedDevice | undefined,
-  key: { readonly corner: string; readonly temp: number },
-): Line {
+export function conditionWords(device: CharacterizedDevice | undefined, key: ConditionKey): Line {
   const member = memberAt(device, key);
-  const corner = (member?.id.corner ?? key.corner).trim();
-  const temp = member?.id.temp ?? key.temp;
-  if (!corner) return t`${celsius(temp)}`;
-  if (!Number.isFinite(temp)) return [nm(corner)];
-  return t`${nm(corner)} ${celsius(temp)}`;
+  const cond = member ? conditionOf(member.id) : key;
+  const cornerV = valueIn(cond, 'corner');
+  const corner = cornerV === undefined ? '' : String(cornerV).trim();
+  const temp = valueIn(cond, 'temp');
+  const finite = typeof temp === 'number' && Number.isFinite(temp);
+  const head: Line =
+    !corner && finite
+      ? t`${celsius(temp)}`
+      : !finite
+        ? corner
+          ? [nm(corner)]
+          : []
+        : t`${nm(corner)} ${celsius(temp)}`;
+  const rest = Object.entries(cond).filter(
+    ([n]) => dimensionName(n) !== 'corner' && dimensionName(n) !== 'temp',
+  );
+  return rest.reduce<Line>((line, [n, v]) => {
+    const word = t`${nm(n.trim())} ${typeof v === 'string' ? nm(v.trim()) : String(v)}`;
+    return line.length ? t`${line} ${word}` : word;
+  }, head);
 }
 
 /**
@@ -94,31 +108,37 @@ export function conditionWords(
  * from the record conditionLabel marks its label from (TableMeta.filled), so the note and the
  * label's mark agree. Empty for a condition its file declared in full, or one no table answers to.
  */
-export function conditionNote(
-  device: CharacterizedDevice | undefined,
-  key: { readonly corner: string; readonly temp: number },
-): Line[] {
+export function conditionNote(device: CharacterizedDevice | undefined, key: ConditionKey): Line[] {
   const member = memberAt(device, key);
   if (!member) return [];
   const filled = member.meta.filled ?? [];
+  const cond = conditionOf(member.id);
   const of = nm(member.id.device);
   const out: Line[] = [];
-  if (filled.includes('temp'))
+  const temp = valueIn(cond, 'temp');
+  if (filled.includes('temp') && typeof temp === 'number')
     out.push(
-      t`The engine assumes ${celsius(member.id.temp)}, because the table of ${of} states no temperature.`,
+      t`The engine assumes ${celsius(temp)}, because the table of ${of} states no temperature.`,
     );
-  if (filled.includes('corner'))
+  const corner = valueIn(cond, 'corner');
+  if (filled.includes('corner') && corner !== undefined)
     out.push(
-      t`The engine assumes the corner ${nm(member.id.corner.trim())}, because the table of ${of} states no corner.`,
+      t`The engine assumes the corner ${nm(String(corner).trim())}, because the table of ${of} states no corner.`,
     );
+  for (const [n, v] of Object.entries(cond)) {
+    const name = dimensionName(n);
+    if (name === 'corner' || name === 'temp' || !filled.some((f) => dimensionName(f) === name))
+      continue;
+    out.push(
+      t`The engine assumes ${nm(n.trim())} ${typeof v === 'string' ? nm(v.trim()) : String(v)}, because the table of ${of} states no ${nm(n.trim())}.`,
+    );
+  }
   return out;
 }
 
 /** The notes of every condition `keys` names, each once. */
-const notesOf = (
-  device: CharacterizedDevice | undefined,
-  keys: readonly { readonly corner: string; readonly temp: number }[],
-): Line[] => distinct(keys.flatMap((k) => conditionNote(device, k)));
+const notesOf = (device: CharacterizedDevice | undefined, keys: readonly ConditionKey[]): Line[] =>
+  distinct(keys.flatMap((k) => conditionNote(device, k)));
 
 // --- counts --------------------------------------------------------------------------------
 
@@ -475,7 +495,7 @@ export function tightestText(agg: ConditionAggregate, device?: CharacterizedDevi
   const named: ConditionKey[] = [];
   const groups = new Map<string, { ids: string[]; points: readonly At[] }>();
   for (const c of agg.onLimit) {
-    const k = JSON.stringify(c.points.map((p) => [p.key.corner, p.key.temp, p.rangeEnd ?? null]));
+    const k = JSON.stringify(c.points.map((p) => [conditionKeyId(p.key), p.rangeEnd ?? null]));
     const g = groups.get(k);
     if (g) g.ids.push(c.id);
     else groups.set(k, { ids: [c.id], points: c.points });

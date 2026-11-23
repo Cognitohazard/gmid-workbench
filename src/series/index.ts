@@ -5,6 +5,7 @@
 // family + any other axes) + deriveColumn (evaluate the expression).
 
 import type { DeviceTable, Grid } from '../types';
+import { conditionOf } from '../condition';
 import { sliceGrid, orient, interp1, offHull } from '../grid';
 import type { Oriented } from '../grid';
 import { DERIVED_FORMS, compileExpr, derivedForm, evalColumn, metaScalars } from '../derive';
@@ -360,7 +361,9 @@ export function overlayCurvesXY(
   const elsewhere: string[] = [];
   const readElsewhere = (tbl: DeviceTable, at: Record<string, number>, fam: string | null) => {
     const shared = tables.filter((t) => t.id.device === tbl.id.device).length > 1;
-    const name = shared ? `${tbl.id.device} ${tbl.id.corner}@${tbl.id.temp}` : tbl.id.device;
+    const name = shared
+      ? `${tbl.id.device} ${Object.values(conditionOf(tbl.id)).join('@')}`
+      : tbl.id.device;
     for (const n of pinnedElsewhere(tbl, at, sweepName, fam)) elsewhere.push(`${name}: ${n}`);
   };
   const elsewhereNote = (): string =>

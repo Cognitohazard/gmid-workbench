@@ -269,7 +269,7 @@ describe('operating axes — the corners of a claimed box, checked on the held d
     doc.params.find((p) => p.name === 'x_floor')!.value = 1.5;
     const retag = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
-      id: { ...t.id, corner, temp },
+      id: { device: t.id.device, condition: { corner, temp } },
     });
     const [device] = groupDevices([
       retag(dev, 'tt', 27),

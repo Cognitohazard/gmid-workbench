@@ -185,7 +185,7 @@ const ahujaMargins = (gm1: number, gm2: number, gmc: number) => {
 const sizedAndHeld = (doc: SheetDoc): [SheetResult, SheetResult] => {
   const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
     ...t,
-    id: { ...t.id, corner, temp },
+    id: { device: t.id.device, condition: { corner, temp } },
   });
   const weak = scaleQuantities(table, { id: 0.5, gm: 0.5 });
   const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);

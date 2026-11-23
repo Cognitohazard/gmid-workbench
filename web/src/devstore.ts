@@ -1,4 +1,4 @@
-import { DEFAULT_TEMP_C } from '@gmid/mostab-core';
+import { DEFAULT_TEMP_C, conditionOf } from '@gmid/mostab-core';
 // Local persistence for loaded device tables — IndexedDB, because a characterization
 // grid (megabytes of Float64Array) is far past localStorage budgets and structured
 // clone stores Maps and typed arrays natively. Client-only like everything else: the
@@ -175,7 +175,7 @@ export function withRecordedFill(dt: DeviceTable): DeviceTable {
   if (dt.meta.filled !== undefined || dt.meta.temp !== undefined) return dt;
   // A stored identity at any temperature other than the default was declared: the default is
   // the only value the importer ever fills in.
-  if (dt.id.temp !== DEFAULT_TEMP_C) return dt;
+  if (conditionOf(dt.id).temp !== DEFAULT_TEMP_C) return dt;
   return { ...dt, meta: { ...dt.meta, filled: ['temp'] } };
 }
 
@@ -193,9 +193,20 @@ export function saneTable(dt: DeviceTable | undefined): dt is DeviceTable {
   const filled: unknown = dt.meta?.filled;
   if (
     filled !== undefined &&
-    !(
-      Array.isArray(filled) && filled.every((f) => f === 'device' || f === 'corner' || f === 'temp')
-    )
+    !(Array.isArray(filled) && filled.every((f) => typeof f === 'string'))
+  )
+    return false;
+  // The condition is read as a record of text and number values everywhere it is compared or
+  // labelled, in either stored identity shape.
+  const id: unknown = dt.id;
+  const cond: unknown =
+    typeof id === 'object' && id !== null && 'condition' in id
+      ? id.condition
+      : { corner: (id as { corner?: unknown }).corner, temp: (id as { temp?: unknown }).temp };
+  if (
+    typeof cond !== 'object' ||
+    cond === null ||
+    !Object.values(cond).every((v) => typeof v === 'string' || typeof v === 'number')
   )
     return false;
   const { axes, shape } = dt.grid;

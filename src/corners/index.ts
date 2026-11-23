@@ -34,8 +34,38 @@
 // Pure; zero DOM. Corner is categorical: nothing here interpolates, resamples, clips, or
 // merges tables across corners.
 
-import type { DeviceTable, OutsideTable, QAWarning, TableId } from '../types';
+import type {
+  ConditionDimension,
+  ConditionKey,
+  DeviceTable,
+  OutsideTable,
+  QAWarning,
+  TableId,
+} from '../types';
 import { DEFAULT_TEMP_C } from '../constants';
+
+export type { ConditionDimension, ConditionKey, ConditionValue } from '../types';
+export {
+  DEFAULT_DIMENSIONS,
+  conditionKeyId,
+  conditionPart,
+  conditionKeyOf,
+  conditionOf,
+  dimensionName,
+  sameCondition,
+  sanitizeConditionKey,
+  tableTempC,
+} from '../condition';
+import {
+  DEFAULT_DIMENSIONS,
+  conditionKeyId,
+  conditionKeyOf,
+  conditionOf,
+  dimensionName,
+  isTableId,
+  sameCondition,
+  valueIn,
+} from '../condition';
 import type {
   CheckKind,
   CheckResult,
@@ -96,44 +126,13 @@ import { unwalkedReport } from '../sheet/nodes';
 
 // --- condition identity --------------------------------------------------------
 
-/**
- * The canonical identity of one characterization condition. `corner` is trimmed and
- * lower-cased so a file written `TT` and one written `tt` name the same condition; the source
- * spelling stays on the table for display (see `conditionLabel`).
- */
-export interface ConditionKey {
-  readonly corner: string;
-  readonly temp: number; // [°C]
-}
-
-/** The canonical key of a table's identity. Accepts a table's own identity or a bare key, like
- *  `conditionLabel`, so a caller canonicalizing a stored selection has no device name to invent. */
-export function conditionKeyOf(
-  id: TableId | { readonly corner: string; readonly temp: number },
-): ConditionKey {
-  // `+ 0` folds -0 onto 0, so a table written `# temp: -0` is not its own condition.
-  return { corner: id.corner.trim().toLowerCase(), temp: id.temp + 0 };
-}
-
-/** Key equality — the ONE comparison every consumer shares, so grouping, projection,
- *  duplicate detection and persisted selections can never disagree about what one condition
- *  is. `Object.is` on the temperature so a table carrying a non-finite temperature still
- *  matches itself rather than fragmenting into a key nothing can select. */
-export function sameCondition(a: ConditionKey, b: ConditionKey): boolean {
-  return a.corner === b.corner && Object.is(a.temp, b.temp);
-}
-
-/** A key as a map/set key. JSON, not a joined string: a corner spelling is arbitrary text and
- *  an unescaped delimiter would let one condition impersonate another. The temperature goes in
- *  as text because JSON writes every non-finite number as `null`, which would collapse
- *  conditions `sameCondition` calls distinct into one id — a phantom duplicate. */
-export function conditionKeyId(k: ConditionKey): string {
-  return JSON.stringify([k.corner, String(k.temp)]);
-}
+const isTable = (of: TableId | ConditionKey | DeviceTable): of is DeviceTable =>
+  'grid' in of && typeof of.grid === 'object' && of.grid !== null;
 
 /**
  * The condition as a designer writes it: source spelling preserved, and the temperature elided at
- * the 27 °C default so the common case reads `tt`, not `tt@27`. Accepts a table, a table's own
+ * the 27 °C default so the common case reads `tt`, not `tt@27`. Dimensions other than the corner
+ * and the temperature follow as `name value` (`tt@125, vdd 1.62`). Accepts a table, a table's
  * identity or a bare key, so a selected condition with no table loaded still labels.
  *
  * A table also brings its record of what its file did not declare (TableMeta.filled). A field
@@ -141,24 +140,44 @@ export function conditionKeyId(k: ConditionKey): string {
  * (assumed)` and a corner taken as `tt` reads `tt (assumed)`, so a label never presents a
  * default as a declaration. Label a table by the table, not by its `id`, wherever one is at hand.
  */
-export function conditionLabel(
-  of: { readonly corner: string; readonly temp: number } | DeviceTable,
-): string {
-  const id = 'grid' in of ? of.id : of;
-  const filled = 'grid' in of ? (of.meta.filled ?? []) : [];
-  const corner = id.corner.trim();
-  const noCorner = filled.includes('corner');
-  if (filled.includes('temp'))
-    return `${corner}@${id.temp} °C (${noCorner ? 'corner and temperature assumed' : 'assumed'})`;
-  const shown = noCorner ? `${corner} (assumed)` : corner;
-  return id.temp === DEFAULT_TEMP_C ? shown : `${shown}@${id.temp}`;
+export function conditionLabel(of: TableId | ConditionKey | DeviceTable): string {
+  const table = isTable(of) ? of : undefined;
+  const cond: ConditionKey = isTable(of)
+    ? conditionOf(of.id)
+    : isTableId(of)
+      ? conditionOf(of)
+      : (of as ConditionKey);
+  const filled = table?.meta.filled ?? [];
+  const cornerV = valueIn(cond, 'corner');
+  const tempV = valueIn(cond, 'temp');
+  const corner = cornerV === undefined ? undefined : String(cornerV).trim();
+  const noCorner = corner !== undefined && filled.includes('corner');
+  const noTemp = tempV !== undefined && filled.includes('temp');
+  let head: string;
+  if (corner === undefined)
+    head = tempV === undefined ? '' : `${tempV} °C${noTemp ? ' (assumed)' : ''}`;
+  else if (tempV === undefined) head = noCorner ? `${corner} (assumed)` : corner;
+  else if (noTemp)
+    head = `${corner}@${tempV} °C (${noCorner ? 'corner and temperature assumed' : 'assumed'})`;
+  else {
+    const shown = noCorner ? `${corner} (assumed)` : corner;
+    head = tempV === DEFAULT_TEMP_C ? shown : `${shown}@${tempV}`;
+  }
+  const rest = Object.entries(cond)
+    .filter(([n]) => dimensionName(n) !== 'corner' && dimensionName(n) !== 'temp')
+    .map(([n, v]) => {
+      const name = n.trim();
+      const assumed = filled.includes(name) || filled.includes(dimensionName(n));
+      return `${name} ${typeof v === 'string' ? v.trim() : v}${assumed ? ' (assumed)' : ''}`;
+    });
+  return [head, ...rest].filter((p) => p !== '').join(', ');
 }
 
 /** A condition of `device` labelled with what its table's file did not declare (conditionLabel):
  *  the member at `key` supplies the record. A key no member answers to labels bare. */
 export function conditionLabelIn(
   device: CharacterizedDevice | undefined,
-  key: { readonly corner: string; readonly temp: number },
+  key: ConditionKey,
 ): string {
   const at = conditionKeyOf(key);
   const member = device?.conditions.find((t) => sameCondition(conditionKeyOf(t.id), at));
@@ -266,7 +285,7 @@ export interface CharacterizedDevice {
   readonly duplicates: readonly ConditionKey[];
   /** The condition a run means by "nominal", or `undefined` when nothing designates one. */
   readonly nominal: DeviceTable | undefined;
-  /** Where `nominal` came from: `auto` (the tt-at-27 rule), `designated` (a bench choice that
+  /** Where `nominal` came from: `auto` (the fill rule: by default tt nearest 27 °C), `designated` (a bench choice that
    *  resolved), `unresolved` (a bench choice naming a member that is no longer loaded — the
    *  auto rule is deliberately NOT reapplied, so a stale designation stays visible instead of
    *  silently sliding to another corner), or `none` (no rule produced one). */
@@ -276,11 +295,11 @@ export interface CharacterizedDevice {
    *  member is loaded but two tables claim its condition (`ambiguous` — remove one). Absent
    *  unless `nominalSource` is `unresolved`. */
   readonly unresolvedNominal?: 'absent' | 'ambiguous';
-  /** On an automatic nominal, the fields of its condition that its file did not declare
-   *  (TableMeta.filled): its corner taken as `tt`, its temperature as 27 °C. Set only when no
-   *  member of the device declares its condition, because a filled-in condition never wins the
-   *  automatic rule over a declared one — so a nominal that rests on a default says so. */
-  readonly nominalAssumed?: readonly ('corner' | 'temp')[];
+  /** On an automatic nominal, the dimensions of its condition that its file did not declare
+   *  (TableMeta.filled): by default its corner taken as `tt`, its temperature as 27 °C. Set only
+   *  when no member of the device declares its condition, because a filled-in condition never
+   *  wins the automatic rule over a declared one — so a nominal that rests on a default says so. */
+  readonly nominalAssumed?: readonly string[];
   /** Members the automatic rule passed over because their condition was filled in while another
    *  member declares its own: a headerless file reads as tt at 27 °C, which would otherwise be
    *  the rule's first pick, so a bench that has no nominal — or a different one — says which
@@ -297,6 +316,9 @@ export interface GroupDevicesOptions {
   readonly nominalByDevice?: ReadonlyMap<string, string>;
   /** The caller's identity for a table (the bench's content uid). */
   readonly uidOf?: (t: DeviceTable) => string;
+  /** The condition dimensions whose fills the automatic nominal reads; DEFAULT_DIMENSIONS when
+   *  absent. */
+  readonly dimensions?: readonly ConditionDimension[];
 }
 
 /**
@@ -388,9 +410,11 @@ function buildDevice(
   };
 }
 
-/** The condition fields of a table its file did not declare (TableMeta.filled). */
-const assumedCondition = (t: DeviceTable): ('corner' | 'temp')[] =>
-  (t.meta.filled ?? []).filter((f): f is 'corner' | 'temp' => f === 'corner' || f === 'temp');
+/** The dimensions of a table's condition its file did not declare (TableMeta.filled). */
+const assumedCondition = (t: DeviceTable): string[] => {
+  const names = Object.keys(conditionKeyOf(t.id));
+  return (t.meta.filled ?? []).filter((f) => f !== 'device' && names.includes(dimensionName(f)));
+};
 
 /** An automatic nominal, with the fields of its condition that were filled in when there are any. */
 function autoNominal(
@@ -403,13 +427,13 @@ function autoNominal(
 }
 
 /** The nominal rule: a bench designation if there is one, else a sole member speaking for
- *  itself, else the tt member closest to 27 °C. Every ambiguity — two tt temperatures
- *  equidistant from 27, or two tables claiming the winning condition — yields no designation
- *  rather than a load-order winner, because which characterization is nominal is a statement
- *  about the bench, not about which file arrived first. A designation that lands on a
- *  duplicated condition is unusable the same way a vanished one is: every projection at that
- *  condition refuses, so it reads as unresolved rather than advertising a nominal no run can
- *  use.
+ *  itself, else the member whose condition sits at every dimension's fill — by default the tt
+ *  member closest to 27 °C (fillMember). Every ambiguity — two tt temperatures equidistant from
+ *  27, or two tables claiming the winning condition — yields no designation rather than a
+ *  load-order winner, because which characterization is nominal is a statement about the bench,
+ *  not about which file arrived first. A designation that lands on a duplicated condition is
+ *  unusable the same way a vanished one is: every projection at that condition refuses, so it
+ *  reads as unresolved rather than advertising a nominal no run can use.
  *
  *  The automatic rule reads DECLARED conditions only while the device has any: a file that
  *  declares no corner is `tt`, and one that declares no temperature is at 27 °C, by default
@@ -436,36 +460,50 @@ function designate(
     return { nominal: hit, nominalSource: 'designated' };
   }
   if (conditions.length === 1) return autoNominal(conditions[0]);
+  const fills = (opts?.dimensions ?? DEFAULT_DIMENSIONS).filter((d) => d.fill !== undefined);
   const declared = conditions.filter((t) => assumedCondition(t).length === 0);
   const pool = declared.length ? declared : conditions;
   // Set aside: the filled-in members the rule would have read, had it read them.
   const setAside = declared.length
-    ? conditions.filter((t) => !declared.includes(t) && conditionKeyOf(t.id).corner === 'tt')
+    ? conditions.filter((t) => !declared.includes(t) && atTextFills(t, fills))
     : [];
   const passed = setAside.length ? { nominalPassedOver: setAside } : {};
-  const tt = pool.filter((t) => conditionKeyOf(t.id).corner === 'tt');
-  const near = tt.length ? nearestTo27(tt) : undefined;
+  const near = fills.length ? fillMember(pool, fills) : undefined;
   return near
     ? { ...autoNominal(near), ...passed }
     : { nominal: undefined, nominalSource: 'none', ...passed };
 }
 
-/** The single closest member to 27 °C, or `undefined` when the closest distance is shared —
- *  which covers both an exact straddle (17 and 37) and a duplicated winning condition. */
-function nearestTo27(tt: readonly DeviceTable[]): DeviceTable | undefined {
-  let best: DeviceTable | undefined;
-  let bestDist = Infinity;
-  let atBest = 0;
-  for (const t of tt) {
-    const dist = Math.abs(conditionKeyOf(t.id).temp - DEFAULT_TEMP_C);
-    if (!Number.isFinite(dist)) continue;
-    if (dist < bestDist) {
-      best = t;
-      bestDist = dist;
-      atBest = 1;
-    } else if (dist === bestDist) atBest++;
+/** Whether a table's condition holds every text dimension's fill (by default: its corner is tt). */
+const atTextFills = (t: DeviceTable, fills: readonly ConditionDimension[]): boolean => {
+  const key = conditionKeyOf(t.id);
+  return fills.every(
+    (d) => typeof d.fill !== 'string' || key[dimensionName(d.name)] === d.fill.trim().toLowerCase(),
+  );
+};
+
+/** The single member at every dimension's fill, dimension by dimension in order: a text
+ *  dimension keeps the members whose value is its fill, a number dimension the members closest
+ *  to its fill (a missing or non-finite value never is). `undefined` unless exactly one member
+ *  is left — which covers both an exact straddle (17 and 37 around 27) and a duplicated winning
+ *  condition. */
+function fillMember(
+  pool: readonly DeviceTable[],
+  fills: readonly ConditionDimension[],
+): DeviceTable | undefined {
+  let left = pool.filter((t) => atTextFills(t, fills));
+  for (const d of fills) {
+    if (typeof d.fill !== 'number') continue;
+    const name = dimensionName(d.name);
+    const fill = d.fill;
+    const dist = (t: DeviceTable): number => {
+      const v = conditionKeyOf(t.id)[name];
+      return typeof v === 'number' ? Math.abs(v - fill) : NaN;
+    };
+    const best = Math.min(...left.map(dist).filter(Number.isFinite));
+    left = left.filter((t) => dist(t) === best);
   }
-  return atBest === 1 ? best : undefined;
+  return left.length === 1 ? left[0] : undefined;
 }
 
 /** The device's unique table at one condition — the ONE projection rule. `undefined` when no

@@ -439,7 +439,7 @@ describe('overlayCurvesXY says where a table is read away from the pinned bias',
   });
 
   it('two tables of one device are told apart by their condition', () => {
-    const ss = { ...short, id: { ...short.id, corner: 'ss', temp: 85 } };
+    const ss = { ...short, id: { device: short.id.device, condition: { corner: 'ss', temp: 85 } } };
     const ov = overlayCurvesXY([short, ss], 'gm/id', 'id', 'vgs', 'l', { vds: 0.6 });
     expect(ov.warning).toContain('nmos_short tt@27: vsb');
     expect(ov.warning).toContain('nmos_short ss@85: vsb');

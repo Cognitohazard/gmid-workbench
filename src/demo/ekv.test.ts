@@ -370,12 +370,12 @@ describe('the full-range EKV device at a second condition', () => {
       for (let i = 0; i < c.length; i++) if (!Object.is(c[i], d[i])) differ++;
       expect(differ, k).toBe(0);
     }
-    expect(b.id).toEqual({ device: 'nmos_ekv', corner: 'tt', temp: 27 });
+    expect(b.id).toEqual({ device: 'nmos_ekv', condition: { corner: 'tt', temp: 27 } });
   });
 
   it('records the condition in the table identity', () => {
     const t = make({ corner: 'ss', vtShift: 0.05, ispecFactor: 0.85, tempC: 125 });
-    expect(t.id).toEqual({ device: 'nmos_ekv', corner: 'ss', temp: 125 });
+    expect(t.id).toEqual({ device: 'nmos_ekv', condition: { corner: 'ss', temp: 125 } });
     expect(t.meta.temp).toBe(125);
   });
 

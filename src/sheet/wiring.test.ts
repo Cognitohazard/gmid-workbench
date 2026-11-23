@@ -1690,7 +1690,7 @@ describe("both seams count the netlist's structural findings in the wiring verdi
       expect.stringMatching(/^wire "g" is touched only by gates/),
     ]);
     const direct = runSheet(doc, t);
-    const tt = { ...t, id: { ...t.id, corner: 'tt', temp: 27 } };
+    const tt = { ...t, id: { device: t.id.device, condition: { corner: 'tt', temp: 27 } } };
     const [device] = groupDevices([tt]);
     const [run] = runConditions(doc, device, [{ corner: 'tt', temp: 27 }], () => undefined);
     expect(run.state).toBe('evaluated');
@@ -1855,8 +1855,8 @@ describe('compliance and the wiring check read one classification', () => {
   const tt = { corner: 'tt', temp: 27 };
   const ss = { corner: 'ss', temp: 27 };
   const [device] = groupDevices([
-    { ...t, id: { ...t.id, ...tt } },
-    { ...t, id: { ...t.id, ...ss } },
+    { ...t, id: { device: t.id.device, condition: tt } },
+    { ...t, id: { device: t.id.device, condition: ss } },
   ]);
 
   it('walks a centre sized under an assumed level, which still has no compliance answer', () => {
@@ -2105,7 +2105,7 @@ describe('the range a solved wire is searched in is the circuit’s own where th
     expect(r.verdict?.verdict).toBe('undetermined');
     // The condition runs read the same centre: no answer, not infeasibility.
     const tt = { corner: 'tt', temp: 27 };
-    const [device] = groupDevices([{ ...tw, id: { ...tw.id, ...tt } }]);
+    const [device] = groupDevices([{ ...tw, id: { device: tw.id.device, condition: tt } }]);
     const runs = runConditions(follower([-0.5, 0.8], { VG: 0.4 }), device, [tt], () => undefined);
     expect(runs[0].points[0]).toEqual({
       state: 'no-answer',
@@ -2404,10 +2404,10 @@ describe('every held point of the library searches a range holding the root its 
   const tt = { corner: 'tt', temp: 27 };
   const ss = { corner: 'ss', temp: -40 };
   const [device] = groupDevices([
-    { ...libraryTable, id: { ...libraryTable.id, ...tt } },
+    { ...libraryTable, id: { device: libraryTable.id.device, condition: tt } },
     {
       ...libraryTable,
-      id: { ...libraryTable.id, ...ss },
+      id: { device: libraryTable.id.device, condition: ss },
       grid: {
         ...libraryTable.grid,
         quantities: new Map(

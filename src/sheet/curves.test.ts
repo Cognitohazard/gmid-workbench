@@ -156,7 +156,7 @@ describe('the named results a sweep follows', () => {
   });
 
   it('are all gaps on a held sweep at a condition nothing was evaluated at', () => {
-    const tt = { ...table, id: { ...table.id, corner: 'tt', temp: 27 } };
+    const tt = { ...table, id: { device: table.id.device, condition: { corner: 'tt', temp: 27 } } };
     const [device] = groupDevices([tt]);
     // The design is sized at tt and held at ss, which has no table: no sample is evaluated there.
     const held = sweepAtCondition(

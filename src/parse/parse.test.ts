@@ -1,3 +1,4 @@
+import { conditionOf } from '../condition';
 import { describe, it, expect } from 'vitest';
 import { mostabHeaderKeys, parseMostabCsv } from './index';
 import type { Dataset } from '../types';
@@ -34,8 +35,8 @@ describe('parseMostabCsv', () => {
 
     // identity from metadata
     expect(t.id.device).toBe('nch_lvt');
-    expect(t.id.corner).toBe('ss');
-    expect(t.id.temp).toBe(27);
+    expect(conditionOf(t.id).corner).toBe('ss');
+    expect(conditionOf(t.id).temp).toBe(27);
 
     // grid shape: l (2) x vgs (3)
     expect(t.grid.shape).toEqual([2, 3]);
@@ -103,7 +104,7 @@ L,VGS,ID,GM
   it('honors hints over metadata for device/corner', () => {
     const ds = expectOk(parseMostabCsv(CSV, { device: 'override', corner: 'ff' }));
     expect(ds.tables[0].id.device).toBe('override');
-    expect(ds.tables[0].id.corner).toBe('ff');
+    expect(conditionOf(ds.tables[0].id).corner).toBe('ff');
   });
 
   it('falls back to defaults when no device/corner present', () => {
@@ -113,8 +114,8 @@ L,VGS,ID,GM
 `;
     const ds = expectOk(parseMostabCsv(csv));
     expect(ds.tables[0].id.device).toBe('dev0');
-    expect(ds.tables[0].id.corner).toBe('tt');
-    expect(ds.tables[0].id.temp).toBe(27);
+    expect(conditionOf(ds.tables[0].id).corner).toBe('tt');
+    expect(conditionOf(ds.tables[0].id).temp).toBe(27);
     // ...and records that all three were filled in, not declared.
     expect(ds.tables[0].meta.filled).toEqual(['device', 'corner', 'temp']);
     expect(ds.tables[0].meta.temp).toBeUndefined();
@@ -164,7 +165,7 @@ L,VGS,ID,GM
     for (const k of ['temp', 'W', 'AVT', 'ABETA', 'FCO', 'polarity'] as const)
       expect(t.meta[k]).toBeUndefined();
     // The temperature it could not read is the default, filled in like a missing one.
-    expect(t.id.temp).toBe(27);
+    expect(conditionOf(t.id).temp).toBe(27);
     expect(t.meta.filled).toEqual(['temp']);
   });
 

@@ -1,5 +1,7 @@
 <script lang="ts">
   import {
+    tableTempC,
+    conditionOf,
     sizeDevice,
     sizeableLengths,
     LookupError,
@@ -296,7 +298,7 @@
     const density = thermalNoise(
       sizing.result.gm,
       sizing.result.quantities.gamma,
-      sizingTable.meta.temp,
+      tableTempC(sizingTable),
       sizing.result.quantities.gmb,
     );
     // The core owns the band/PSD preconditions (0 < fLo < fHi, fc ≥ 0, sth ≥ 0 — the
@@ -378,7 +380,12 @@
     const rows = [
       line(
         'device',
-        `${device.id.device} ${device.id.corner} ${device.id.temp}C` +
+        [
+          device.id.device,
+          ...Object.entries(conditionOf(device.id)).map(([n, v]) =>
+            n === 'corner' ? String(v) : n === 'temp' ? `${v}C` : `${n} ${v}`,
+          ),
+        ].join(' ') +
           (device.meta.filled?.length ? ` (assumed: ${device.meta.filled.join(', ')})` : ''),
       ),
       line('L', `${formatEng(sizeL)}m`),

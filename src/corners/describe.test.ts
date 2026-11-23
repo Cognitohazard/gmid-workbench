@@ -38,7 +38,7 @@ const retag = (
   meta: TableMeta = {},
 ): DeviceTable => ({
   ...t,
-  id: { ...t.id, corner, temp },
+  id: { device: t.id.device, condition: { corner, temp } },
   meta: { ...t.meta, ...meta },
 });
 const key = (corner: string, temp = 27): ConditionKey => ({ corner, temp });

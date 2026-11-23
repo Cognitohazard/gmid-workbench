@@ -4,18 +4,23 @@
 
 import type {
   Axis,
+  ConditionDimension,
+  ConditionKey,
+  ConditionValue,
   Dataset,
   DeviceTable,
   FilledField,
   ImportError,
   ImportHints,
   ImportResult,
+  QAWarning,
   TableId,
   TableMeta,
 } from '../types';
 import { ALIASES, passthroughKeys } from '../namespace';
 import { makeGrid, strides } from '../grid';
-import { DEFAULT_CORNER, DEFAULT_TEMP_C } from '../constants';
+import { DEFAULT_DIMENSIONS, dimensionName } from '../condition';
+import { DEFAULT_TEMP_C } from '../constants';
 
 // The canonical sweep-axis keys, in their conventional grid order
 // (first axis varies slowest in row-major storage).
@@ -286,6 +291,148 @@ function headerKeys(header: string): string[] {
   return header.split(detectDelimiter(header)).map((c) => canonicalizeHeader(c).key);
 }
 
+/** What a file's headers and the import's hints make of its condition. */
+type ResolvedCondition =
+  | {
+      readonly ok: true;
+      readonly condition: ConditionKey;
+      /** The temperature declared by a header or a hint, if any (TableMeta.temp). */
+      readonly temp: number | undefined;
+      /** The dimensions taken at their fill. */
+      readonly filledIn: readonly string[];
+      /** The dimensions neither declared nor filled, left out of the condition. */
+      readonly left: readonly string[];
+    }
+  | { readonly ok: false; readonly errors: readonly ImportError[] };
+
+/** A header or hint value as a dimension of `kind` reads it, or undefined when it cannot. */
+function asDimensionValue(
+  v: ConditionValue | undefined,
+  kind: ConditionDimension['kind'],
+): ConditionValue | undefined {
+  if (v === undefined) return undefined;
+  if (kind === 'text') return String(v);
+  const n = typeof v === 'number' ? v : Number(String(v).trim());
+  return typeof v === 'string' && v.trim() === '' ? undefined : Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * The table's condition, dimension by dimension: the import's hint, else the file's header, else
+ * the dimension's fill (recorded as filled), else left out (recorded as unset, so QA warns). The
+ * corner and the temperature read their own headers (`# corner:`, `# temp:`); every other
+ * dimension reads a `# name: value` line of the same name, case-insensitive. Without
+ * `hints.dimensions` the dimensions are the corner and the temperature, filled with their default
+ * values.
+ */
+function resolveCondition(meta: ParsedMeta, hints: ImportHints | undefined): ResolvedCondition {
+  const dims = hints?.dimensions ?? DEFAULT_DIMENSIONS;
+  const seen = new Set<string>();
+  for (const d of dims) {
+    const name = dimensionName(d.name);
+    if (name === 'device' || name === '')
+      return {
+        ok: false,
+        errors: [
+          err(
+            'bad-dimension',
+            name === ''
+              ? 'a condition dimension needs a name'
+              : '"device" names the device, not a condition dimension',
+          ),
+        ],
+      };
+    if (seen.has(name))
+      return {
+        ok: false,
+        errors: [err('bad-dimension', `the condition dimension "${name}" is named twice`)],
+      };
+    seen.add(name);
+    // The engine reads a table's temperature in °C, filling 27 °C, whether or not temperature
+    // is a dimension; a temp dimension of another kind or fill would label the table apart from
+    // the temperature its figures are computed at.
+    if (
+      name === 'temp' &&
+      (d.kind !== 'number' || (d.fill !== undefined && d.fill !== DEFAULT_TEMP_C))
+    )
+      return {
+        ok: false,
+        errors: [
+          err(
+            'bad-dimension',
+            `the temp dimension is the table's temperature in °C: a number, filled with ${DEFAULT_TEMP_C} when given a fill`,
+          ),
+        ],
+      };
+  }
+  for (const [k, v] of Object.entries(hints?.condition ?? {})) {
+    const name = dimensionName(k);
+    const d = dims.find((x) => dimensionName(x.name) === name);
+    if (!d && name !== 'temp')
+      return {
+        ok: false,
+        errors: [
+          err('bad-dimension', `the condition names "${k}", which is not one of its dimensions`),
+        ],
+      };
+    if (asDimensionValue(v, d?.kind ?? 'number') === undefined)
+      return {
+        ok: false,
+        errors: [
+          err(
+            'bad-dimension',
+            `the condition gives ${k} the value "${String(v)}", which is not a ${d?.kind ?? 'number'}`,
+          ),
+        ],
+      };
+  }
+  const hinted = (name: string): ConditionValue | undefined => {
+    if (name === 'corner' && hints?.corner !== undefined) return hints.corner;
+    for (const [k, v] of Object.entries(hints?.condition ?? {}))
+      if (dimensionName(k) === name) return v;
+    return undefined;
+  };
+  const header = (name: string): ConditionValue | undefined => {
+    if (name === 'corner') return meta.corner;
+    if (name === 'temp') return meta.temp;
+    for (const [k, v] of Object.entries(meta.extra ?? {})) if (dimensionName(k) === name) return v;
+    return undefined;
+  };
+  // A temperature hint declares the table's temperature whether or not it is a dimension.
+  const hintTemp = asDimensionValue(hinted('temp'), 'number');
+  const temp = typeof hintTemp === 'number' ? hintTemp : meta.temp;
+  const condition: Record<string, ConditionValue> = {};
+  const filledIn: string[] = [];
+  const left: string[] = [];
+  for (const d of dims) {
+    const name = dimensionName(d.name);
+    const raw = name === 'corner' || name === 'temp' ? undefined : header(name);
+    if (
+      raw !== undefined &&
+      hinted(name) === undefined &&
+      asDimensionValue(raw, d.kind) === undefined
+    )
+      return {
+        ok: false,
+        errors: [
+          err(
+            'bad-dimension',
+            `the header # ${name}: ${String(raw)} is not a ${d.kind}, as the ${name} dimension is`,
+          ),
+        ],
+      };
+    const declared =
+      asDimensionValue(hinted(name), d.kind) ??
+      (name === 'temp' ? temp : asDimensionValue(header(name), d.kind));
+    const fill = asDimensionValue(d.fill, d.kind);
+    if (declared !== undefined) condition[name] = declared;
+    else if (fill !== undefined) {
+      condition[name] = fill;
+      filledIn.push(name);
+    } else left.push(name);
+  }
+  return { ok: true, condition, temp, filledIn, left };
+}
+
 export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): ImportResult {
   const meta: ParsedMeta = {};
   const decoded = stripBom(toText(text));
@@ -454,20 +601,23 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
   // recorded as such (TableMeta.filled) so every reader can say it was assumed.
   const declaredDevice = hints?.device ?? meta.device;
   const device = declaredDevice ?? deviceFromFilename(hints?.filename) ?? 'dev0';
-  const declaredCorner = hints?.corner ?? meta.corner;
-  const corner = declaredCorner ?? DEFAULT_CORNER;
-  const temp = meta.temp ?? DEFAULT_TEMP_C;
+  const resolved = resolveCondition(meta, hints);
+  if (!resolved.ok) return fail(...resolved.errors);
+  const { condition, temp: declaredTemp, filledIn: conditionFilled, left } = resolved;
   const filledIn: FilledField[] = [];
   if (declaredDevice === undefined) filledIn.push('device');
-  if (declaredCorner === undefined) filledIn.push('corner');
-  if (meta.temp === undefined) filledIn.push('temp');
+  filledIn.push(...conditionFilled);
+  // The engine reads every table at a temperature (tableTempC), whether or not temperature is
+  // one of the condition dimensions; one the file and the import did not declare is assumed.
+  if (declaredTemp === undefined && !filledIn.includes('temp')) filledIn.push('temp');
 
-  const id: TableId = { device, corner, temp };
+  const id: TableId = { device, condition };
+  const warnings: QAWarning[] = [];
 
   const tableMeta: TableMeta = {};
   const mutMeta = tableMeta as { -readonly [K in keyof TableMeta]: TableMeta[K] };
   if (meta.W !== undefined) mutMeta.W = meta.W;
-  if (meta.temp !== undefined) mutMeta.temp = meta.temp;
+  if (declaredTemp !== undefined) mutMeta.temp = declaredTemp;
   if (meta.pdk !== undefined) mutMeta.pdk = meta.pdk;
   if (meta.simulator !== undefined) mutMeta.simulator = meta.simulator;
   if (meta.date !== undefined) mutMeta.date = meta.date;
@@ -480,6 +630,7 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
     mutMeta.polarity = { device: meta.polarity, signedInput: meta.polarity === 'p' };
   }
   if (filledIn.length) mutMeta.filled = filledIn;
+  if (left.length) mutMeta.unset = left;
   if (meta.extra !== undefined) mutMeta.extra = meta.extra;
 
   // The pass-through set is the namespace's own reading of the grid, so the field and every reader
@@ -490,6 +641,6 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
       ? { id, grid, meta: tableMeta, passthrough: new Set(passthrough) }
       : { id, grid, meta: tableMeta };
 
-  const dataset: Dataset = { tables: [table], warnings: [] };
+  const dataset: Dataset = { tables: [table], warnings };
   return { ok: true, dataset };
 }

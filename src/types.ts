@@ -44,29 +44,71 @@ export interface TableMeta {
   readonly ABETA?: number; // Pelgrom current-factor constant [m]
   readonly FCO?: number; // 1/f (flicker) noise corner frequency [Hz]
   /**
-   * The identity fields the importer filled in because the file did not declare them, in the
-   * order device, corner, temp: a device named after the file (or `dev0`), the corner `tt`, the
-   * temperature 27 °C. TableId holds the filled-in value like a declared one, so this is the only
-   * record that it was assumed — what QA, the condition labels, the nominal pick and every sizing
-   * read to say so. Absent when the file declared all three.
+   * The identity fields the importer filled in because the file did not declare them: `device`
+   * when the table is named after the file (or `dev0`), then each condition dimension given its
+   * fill value (by default the corner `tt` and the temperature 27 °C), under the dimension's
+   * name. The table's identity holds a filled-in value like a declared one, so this is the only
+   * record that it was assumed — what QA, the condition labels, the nominal pick and every
+   * sizing read to say so. `temp` is listed whenever the file gave no temperature, whether or
+   * not temperature is a condition dimension, because the engine still reads one (tableTempC).
+   * Absent when nothing was filled in.
    */
   readonly filled?: readonly FilledField[];
+  /** The condition dimensions of the import that the file did not declare and that have no fill,
+   *  so the table's condition leaves them out and QA warns. Absent when none was left out. */
+  readonly unset?: readonly string[];
   /** Extra scalar metadata carried through verbatim (the strict-superset pass-through rule). A
    *  recognized header whose value could not be read (`# temp: 27C`) is kept here as written,
    *  under its own key, and QA names it. */
   readonly extra?: Readonly<Record<string, string | number>>;
 }
 
-/** An identity field the importer can fill in (see TableMeta.filled). */
-export type FilledField = 'device' | 'corner' | 'temp';
+/** An identity field the importer can fill in (see TableMeta.filled): `device`, or the name of
+ *  a condition dimension. */
+export type FilledField = string;
 
-/** Identity of a device table. A field the file did not declare holds the importer's default
- *  and is listed in TableMeta.filled. */
-export interface TableId {
-  readonly device: string;
-  readonly corner: string;
-  readonly temp: number; // [°C], default 27
+/** One value of a condition dimension: text (a corner) or a number (a temperature, a supply). */
+export type ConditionValue = string | number;
+
+/**
+ * One characterization condition: a value for each named dimension, e.g.
+ * `{ corner: 'tt', temp: 27, vdd: 1.8 }`. Which dimensions there are is the designer's choice;
+ * corner and temperature are the defaults. Compare and name keys only through `conditionKeyOf`,
+ * `sameCondition` and `conditionKeyId`.
+ */
+export type ConditionKey = Readonly<Record<string, ConditionValue>>;
+
+/** A condition dimension the importer resolves for every table: from a hint, else the file's
+ *  `# name: value` header, else `fill` (recorded in TableMeta.filled). With no fill and nothing
+ *  declaring it, the table's condition leaves the dimension out and QA says so. */
+export interface ConditionDimension {
+  readonly name: string;
+  readonly kind: 'text' | 'number';
+  readonly unit?: string;
+  readonly fill?: ConditionValue;
 }
+
+/**
+ * Identity of a device table: the device and the condition it was characterized at, in the
+ * file's own spelling (`conditionKeyOf` canonicalizes). A field the file did not declare holds
+ * the importer's fill and is listed in TableMeta.filled.
+ *
+ * The second form is how tables stored before conditions were records hold their identity; it
+ * stays valid as written. Read a table's condition through `conditionOf`, never a field.
+ */
+export type TableId =
+  | {
+      readonly device: string;
+      readonly condition: ConditionKey;
+      readonly corner?: never;
+      readonly temp?: never;
+    }
+  | {
+      readonly device: string;
+      readonly corner: string;
+      readonly temp: number;
+      readonly condition?: never;
+    };
 
 /** One characterized device table: a grid plus identity and metadata. */
 export interface DeviceTable {
@@ -233,7 +275,13 @@ export type ImportResult =
 export interface ImportHints {
   readonly filename?: string;
   readonly device?: string;
+  /** Short form of `condition.corner`. */
   readonly corner?: string;
+  /** The condition dimensions to resolve; corner and temperature (DEFAULT_DIMENSIONS) when
+   *  absent. */
+  readonly dimensions?: readonly ConditionDimension[];
+  /** Values the caller declares for this file, by dimension name; they win over its headers. */
+  readonly condition?: Readonly<Record<string, ConditionValue>>;
 }
 
 /** Definition of a canonical base quantity. */
