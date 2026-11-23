@@ -43,7 +43,7 @@ export function conditionPart(name: string, v: ConditionValue): string {
  * records carries `corner` and `temp`, which read as that same two-dimension condition.
  */
 export function conditionOf(id: TableId): ConditionKey {
-  if ('condition' in id) return id.condition;
+  if (id.condition !== undefined) return id.condition;
   return { corner: id.corner, temp: id.temp };
 }
 

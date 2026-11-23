@@ -97,8 +97,18 @@ export interface ConditionDimension {
  * stays valid as written. Read a table's condition through `conditionOf`, never a field.
  */
 export type TableId =
-  | { readonly device: string; readonly condition: ConditionKey }
-  | { readonly device: string; readonly corner: string; readonly temp: number };
+  | {
+      readonly device: string;
+      readonly condition: ConditionKey;
+      readonly corner?: never;
+      readonly temp?: never;
+    }
+  | {
+      readonly device: string;
+      readonly corner: string;
+      readonly temp: number;
+      readonly condition?: never;
+    };
 
 /** One characterized device table: a grid plus identity and metadata. */
 export interface DeviceTable {
