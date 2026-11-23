@@ -8,6 +8,7 @@
   import {
     addDimension,
     applyRows,
+    deviceFit,
     isAssumed,
     removeDimension,
     typed,
@@ -19,7 +20,7 @@
     rows: initialRows,
     dimensions: initialDimensions,
     failed = [],
-    devices = [],
+    bench = [],
     onconfirm,
     oncancel,
   }: {
@@ -29,8 +30,9 @@
     dimensions: readonly ConditionDimension[];
     /** Files in the batch that could not be read, by name, with why. */
     failed?: readonly { name: string; error: string }[];
-    /** The devices on the bench, by name: offered when a row's device is changed. */
-    devices?: readonly string[];
+    /** The tables on the bench: their devices are offered when a row's device is changed, and
+     *  a row named as one of them says whether it joins it. */
+    bench?: readonly DeviceTable[];
     /** Apply the screen. Returns, per row, why the bench refuses that row's new table (or
      *  undefined); when none is refused the bench has applied every row. */
     onconfirm: (
@@ -52,12 +54,15 @@
   let addError = $state<string | null>(null);
 
   const dimNames = $derived(dimensions.map((d) => dimensionName(d.name)));
-  /** Every device a row can be assigned to without typing it: the bench's and the batch's. */
-  const deviceChoices = $derived(
-    [...new Set([...devices, ...rows.map((r) => (r.cells.device ?? '').trim())])].filter(
-      (n) => n !== '',
-    ),
-  );
+  /** Every device a row can be assigned to without typing it: the bench's and the batch's, as
+   *  their files name them (not as a row is being retyped). */
+  const deviceChoices = $derived([
+    ...new Set([...bench.map((t) => t.id.device), ...rows.map((r) => r.table.id.device)]),
+  ]);
+  /** A row named as a device on the bench that it does not join, because its process namespace
+   *  or polarity differs: said on the row, since the two would otherwise read as one name. */
+  const apart = (r: ImportRow): boolean =>
+    r.declared.includes('device') && deviceFit(r.table, r.cells.device ?? '', bench) === 'apart';
   /** Headers the files declared that are not dimensions yet: what a designer is likely to add. */
   const offered = $derived(
     [
@@ -168,6 +173,9 @@
                   (rows[i] = typed(r, 'device', (e.currentTarget as HTMLInputElement).value))}
               />{#if isAssumed(r, 'device')}<span class="assumed-tag" data-assumed="device"
                   >assumed</span
+                >{:else if apart(r)}<span class="device-apart" data-device-apart
+                  >a device of its own: the {r.cells.device.trim()} on the bench declares another process
+                  or polarity</span
                 >{/if}
             </td>
             {#each dimNames as n (n)}
@@ -282,6 +290,11 @@
   input.assumed {
     font-style: italic;
     opacity: 0.75;
+  }
+  .device-apart {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--warn);
   }
   .assumed-tag {
     margin-left: 0.3rem;

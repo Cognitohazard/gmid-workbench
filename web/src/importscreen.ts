@@ -12,7 +12,9 @@ import {
   conditionKeyOf,
   conditionOf,
   dimensionName,
+  deviceIdentityOf,
   extraScalar,
+  groupDevices,
   sameCondition,
   valueIn,
   withCondition,
@@ -144,8 +146,8 @@ export function removeDimension(
 
 /**
  * Each row's table under the device and condition the screen shows: a typed device name through
- * `withDevice`, every declared value set (a blank one taken out), and every dimension removed on the screen taken out, through `withCondition`
- * against the screen's dimension list. A row the change is refused for carries the reason and
+ * `withDevice`, then every declared value set (a blank one taken out) and every dimension removed
+ * on the screen taken out, through `withCondition` against the screen's dimension list. A row the change is refused for carries the reason and
  * gives no table; the caller applies nothing while any row does.
  */
 export function applyRows(
@@ -171,6 +173,29 @@ export function applyRows(
     return res.ok ? { ...r, error: undefined } : { ...r, error: res.error };
   });
   return { rows: out, tables };
+}
+
+/**
+ * Whether `table`, named as the device `name`, joins a device of that name among `bench`, or
+ * stands apart from it because its process namespace or polarity differs; 'new' when no device
+ * of that name is there. Read from the bench's own grouping, so the screen and the bench agree.
+ */
+export function deviceFit(
+  table: DeviceTable,
+  name: string,
+  bench: readonly DeviceTable[],
+): 'joins' | 'apart' | 'new' {
+  const moved = withDevice(table, name);
+  if (!moved.ok) return 'new';
+  const others = bench.filter((t) => t !== table);
+  const groups = groupDevices([...others, moved.table]);
+  const own = groups.find((g) => g.conditions.includes(moved.table));
+  if (!own) return 'new';
+  if (own.conditions.length > 1) return 'joins';
+  const key = deviceIdentityOf(own.deviceUid)?.device;
+  return groups.some((g) => g !== own && deviceIdentityOf(g.deviceUid)?.device === key)
+    ? 'apart'
+    : 'new';
 }
 
 /**

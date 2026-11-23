@@ -208,7 +208,7 @@
     return lastDevices;
   });
   const deviceOf = $derived(deviceLookup(devices));
-  const deviceNames = $derived([...new Set(devices.map((f) => f.device))]);
+  const benchTables = $derived(tables.map((d) => d.table));
   const primaryDevice = $derived(device ? deviceOf(tableUid(device)) : undefined);
   // Data-trust checks that only exist once several tables claim to be one device (duplicate
   // conditions, disagreeing axes, ranges, widths, provenance). Derived, so they are recomputed
@@ -872,8 +872,10 @@
    * condition follow it — replaced by the new one when no table on the bench still holds the old,
    * joined by it when one does. A table given another device follows the same rules: the nominal
    * designation that named it moves with it to its new device unless that device already has
-   * one, and a sheet block bound to the old device that no longer resolves is listed. Anything
-   * else that named the table is listed as unresolved, with why.
+   * one (the old device's is dropped when it is left with no table), and a sheet block bound to
+   * the old device that no longer resolves, or a sheet's chosen condition the old device no
+   * longer holds, is listed. Anything else that named the table is listed as unresolved, with
+   * why.
    * Refused, row by row, when the new identity is one another table on the bench already has.
    */
   function applyConditions(
@@ -933,20 +935,31 @@
       const now = deviceOf(tableUid(p.to));
       return was && now && was.deviceUid !== now.deviceUid ? [{ p, was, now }] : [];
     });
-    for (const { p, was, now } of moved) {
-      const uid = tableUid(p.to);
-      if (nominalByFamily[was.deviceUid] !== uid) continue;
-      const { [was.deviceUid]: _, ...rest } = nominalByFamily;
-      const left = devices.some((f) => f.deviceUid === was.deviceUid);
-      nominalByFamily = {
-        ...(left ? nominalByFamily : rest),
-        ...(nominalByFamily[now.deviceUid] === undefined ? { [now.deviceUid]: uid } : {}),
-      };
-      if (left)
-        notes.push(
-          `device ${was.device}: its designated nominal condition ${deviceKey(p.to)} now belongs to ${now.device} — designate another`,
-        );
+    // Every designation a moved table carried is lifted first, then given to its new device
+    // where that device has none — so two tables trading devices trade their designations. An
+    // old device left with members and no designation keeps naming the table, which reads as
+    // unresolved, and says so; one left with no members has nothing to designate.
+    const carried = moved.filter((m) => nominalByFamily[m.was.deviceUid] === tableUid(m.p.to));
+    const nominal = { ...nominalByFamily };
+    for (const m of carried) delete nominal[m.was.deviceUid];
+    for (const m of carried) nominal[m.now.deviceUid] ??= tableUid(m.p.to);
+    for (const m of carried) {
+      if (nominal[m.was.deviceUid] !== undefined) continue;
+      if (!devices.some((f) => f.deviceUid === m.was.deviceUid)) continue;
+      nominal[m.was.deviceUid] = tableUid(m.p.to);
+      notes.push(
+        `device ${m.was.device}: its designated nominal condition ${deviceKey(m.p.to)} now belongs to ${m.now.device} — designate another`,
+      );
     }
+    if (carried.length) nominalByFamily = nominal;
+    // A sheet's chosen conditions are read in the active table's device: a chosen condition
+    // that device no longer holds, because its table moved away, is listed.
+    const primary = next[activeIdx] ? deviceOf(tableUid(next[activeIdx].table)) : undefined;
+    const lost = moved.filter(
+      (m) =>
+        primary?.deviceUid === m.was.deviceUid &&
+        !primary.keys.some((k) => sameCondition(k, conditionKeyOf(m.p.from.id))),
+    );
     for (const tab of dashboard?.tabs ?? [])
       for (const panel of tab.panels) {
         if (panel.render !== 'sheet') continue;
@@ -961,6 +974,12 @@
           notes.push(...boundBlocks(`sheet "${name}"`, panel.sheet, p));
         }
         for (const m of moved) notes.push(...boundDevice(`sheet "${name}"`, panel.sheet, m));
+        const chosen = (panel.sheetCornerKeys ?? []).map(conditionKeyOf);
+        for (const m of lost)
+          if (chosen.some((k) => sameCondition(k, conditionKeyOf(m.p.from.id))))
+            notes.push(
+              `sheet "${name}": its chosen condition ${conditionLabel(m.p.from.id)} is no longer in ${m.was.device} — that table now belongs to ${m.now.device}; choose again`,
+            );
       }
     for (const lib of userSheets()) {
       for (const p of plan) notes.push(...boundBlocks(`library sheet "${lib.name}"`, lib.doc, p));
@@ -1377,7 +1396,7 @@
     mode="new"
     rows={s.rows}
     {dimensions}
-    devices={deviceNames}
+    bench={benchTables}
     failed={s.failed}
     onconfirm={(dims, rows, imported) => {
       // Read before the screen closes: `s` follows `screen`.
@@ -1403,7 +1422,7 @@
     mode="stored"
     rows={screen.rows}
     {dimensions}
-    devices={deviceNames}
+    bench={benchTables}
     onconfirm={(dims, rows, changed) => {
       const refused = applyConditions(rows, changed);
       if (!refused.some((e) => e)) {
