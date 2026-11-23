@@ -230,6 +230,24 @@ export function withCondition(
   };
 }
 
+/**
+ * The table, now characterizing the device named `name`: the condition, the data and every
+ * other header are unchanged. The name is trimmed; an empty one is refused. A device the
+ * importer had to assume is declared from here on.
+ */
+export function withDevice(table: DeviceTable, name: string): WithConditionResult {
+  const device = name.trim();
+  if (device === '') return { ok: false, error: 'a table needs a device name' };
+  const filled = (table.meta.filled ?? []).filter((f) => f !== 'device');
+  const meta: Record<string, unknown> = { ...table.meta };
+  if (filled.length) meta.filled = filled;
+  else delete meta.filled;
+  return {
+    ok: true,
+    table: { ...table, id: { ...table.id, device }, meta: meta as DeviceTable['meta'] },
+  };
+}
+
 /** A condition with each dimension name as keys compare it, values in their source spelling. */
 function conditionKeyNames(cond: ConditionKey): Record<string, ConditionValue> {
   const out: Record<string, ConditionValue> = {};

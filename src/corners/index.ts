@@ -57,6 +57,7 @@ export {
   tableTempC,
   valueIn,
   withCondition,
+  withDevice,
   type WithConditionResult,
 } from '../condition';
 import {

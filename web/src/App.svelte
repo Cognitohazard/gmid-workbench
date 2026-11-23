@@ -22,6 +22,7 @@
     validateDevices,
     validateDeviceConditions,
     conditionLabel,
+    deviceUidOf,
     EXAMPLES,
     DERIVED_QUANTITIES,
     cloneDoc,
@@ -41,7 +42,7 @@
   import ImportScreen from './ImportScreen.svelte';
   import {
     applyRows,
-    blocksNamingTable,
+    blocksBoundTo,
     followCornerKeys,
     rowOf,
     type ImportRow,
@@ -92,6 +93,7 @@
   import { plainTable } from './sheetEvaluator.svelte';
   import {
     benchDevices,
+    bindingOfDevice,
     deviceLabel,
     deviceOptions,
     deviceLookup,
@@ -206,6 +208,7 @@
     return lastDevices;
   });
   const deviceOf = $derived(deviceLookup(devices));
+  const deviceNames = $derived([...new Set(devices.map((f) => f.device))]);
   const primaryDevice = $derived(device ? deviceOf(tableUid(device)) : undefined);
   // Data-trust checks that only exist once several tables claim to be one device (duplicate
   // conditions, disagreeing axes, ranges, widths, provenance). Derived, so they are recomputed
@@ -867,7 +870,10 @@
    * new identity (the old record is deleted only once the new one is written), the nominal
    * designation that named it names it still, and a sheet's chosen conditions that named the old
    * condition follow it — replaced by the new one when no table on the bench still holds the old,
-   * joined by it when one does. Anything else that named the table is listed as unresolved.
+   * joined by it when one does. A table given another device follows the same rules: the nominal
+   * designation that named it moves with it to its new device unless that device already has
+   * one, and a sheet block bound to the old device that no longer resolves is listed. Anything
+   * else that named the table is listed as unresolved, with why.
    * Refused, row by row, when the new identity is one another table on the bench already has.
    */
   function applyConditions(
@@ -897,6 +903,8 @@
 
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive migration scratch, discarded below
     const rekey = new Map<string, string>();
+    // The device each moved table belonged to, read before the bench regroups.
+    const deviceBefore = plan.map((p) => deviceOf(tableUid(p.from)));
     const next = [...tables];
     for (const p of plan) {
       const entry: Loaded = { ...tables[p.idx], table: p.to, warnings: validateFile(p.to, p.name) };
@@ -918,6 +926,27 @@
     if (rekey.size) nominalByFamily = migrateNominals(nominalByFamily, rekey);
 
     const notes: string[] = [];
+    // A table given another device: the designation that named it follows it, and what bound
+    // the old device is checked against the bench as it now is.
+    const moved = plan.flatMap((p, i) => {
+      const was = deviceBefore[i];
+      const now = deviceOf(tableUid(p.to));
+      return was && now && was.deviceUid !== now.deviceUid ? [{ p, was, now }] : [];
+    });
+    for (const { p, was, now } of moved) {
+      const uid = tableUid(p.to);
+      if (nominalByFamily[was.deviceUid] !== uid) continue;
+      const { [was.deviceUid]: _, ...rest } = nominalByFamily;
+      const left = devices.some((f) => f.deviceUid === was.deviceUid);
+      nominalByFamily = {
+        ...(left ? nominalByFamily : rest),
+        ...(nominalByFamily[now.deviceUid] === undefined ? { [now.deviceUid]: uid } : {}),
+      };
+      if (left)
+        notes.push(
+          `device ${was.device}: its designated nominal condition ${deviceKey(p.to)} now belongs to ${now.device} — designate another`,
+        );
+    }
     for (const tab of dashboard?.tabs ?? [])
       for (const panel of tab.panels) {
         if (panel.render !== 'sheet') continue;
@@ -931,9 +960,12 @@
           }
           notes.push(...boundBlocks(`sheet "${name}"`, panel.sheet, p));
         }
+        for (const m of moved) notes.push(...boundDevice(`sheet "${name}"`, panel.sheet, m));
       }
-    for (const lib of userSheets())
+    for (const lib of userSheets()) {
       for (const p of plan) notes.push(...boundBlocks(`library sheet "${lib.name}"`, lib.doc, p));
+      for (const m of moved) notes.push(...boundDevice(`library sheet "${lib.name}"`, lib.doc, m));
+    }
     conditionNotes = notes;
     return refused;
   }
@@ -945,10 +977,29 @@
     p: { from: DeviceTable; to: DeviceTable },
   ): string[] {
     if (tableUid(p.from) === tableUid(p.to)) return [];
-    return blocksNamingTable(doc, tableUid(p.from)).map(
+    return blocksBoundTo(doc, tableUid(p.from)).map(
       (path) =>
         `${where}: block ${path} is bound to the table ${deviceKey(p.from)}, which is now ${deviceKey(p.to)} — bind the block to its device again`,
     );
+  }
+
+  /** A sheet's blocks bound to the device a table left, when that binding no longer resolves. */
+  function boundDevice(
+    where: string,
+    doc: SheetDoc | undefined,
+    m: { p: { from: DeviceTable; to: DeviceTable }; was: CharacterizedDevice },
+  ): string[] {
+    const bindings = new Set([
+      bindingOfDevice(m.was.deviceUid),
+      bindingOfDevice(deviceUidOf(m.p.from)),
+    ]);
+    return [...bindings]
+      .filter((b) => !deviceOf(b))
+      .flatMap((b) => blocksBoundTo(doc, b))
+      .map(
+        (path) =>
+          `${where}: block ${path} is bound to the device ${m.was.device}, which no longer has a table — ${deviceKey(m.p.from)} is now ${deviceKey(m.p.to)}; bind the block to a device again`,
+      );
   }
 
   /**
@@ -1326,6 +1377,7 @@
     mode="new"
     rows={s.rows}
     {dimensions}
+    devices={deviceNames}
     failed={s.failed}
     onconfirm={(dims, rows, imported) => {
       // Read before the screen closes: `s` follows `screen`.
@@ -1351,6 +1403,7 @@
     mode="stored"
     rows={screen.rows}
     {dimensions}
+    devices={deviceNames}
     onconfirm={(dims, rows, changed) => {
       const refused = applyConditions(rows, changed);
       if (!refused.some((e) => e)) {

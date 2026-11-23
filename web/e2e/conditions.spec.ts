@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-import { strip, confirmImport } from './helpers';
+import { strip, confirmImport, pickSheet } from './helpers';
 
 // The import screen: one row per table with its device and its value in each condition
 // dimension, opened on a batch of new files and reopened on the stored tables. These tests drive
@@ -32,6 +32,7 @@ const row = (page: Page, name: string) => page.locator(`tr[data-row="${name}"]`)
 
 interface Stored {
   key: string;
+  device: string;
   condition: Record<string, string | number>;
   temp?: number;
   filled: string[];
@@ -58,6 +59,7 @@ const stored = (page: Page): Promise<Stored[]> =>
                 const t = r.table;
                 return {
                   key: String(keys.result[i]),
+                  device: t.id.device,
                   condition: t.id.condition ?? { corner: t.id.corner, temp: t.id.temp },
                   temp: t.meta.temp,
                   filled: t.meta.filled ?? [],
@@ -328,6 +330,131 @@ test('import screen: reopened on a stored table after a reload, a change is stor
   await page.reload();
   await expect(page.locator('.devices .dev[data-variant="tt@125"]')).toBeVisible();
   await expect(page.locator('header [data-temp]')).toHaveText(/125°C/);
+
+  expect(errors).toEqual([]);
+});
+
+test('import screen: a new file is assigned to a device on the bench or to a new one', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await page.goto('/');
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo.mostab.csv');
+  await confirmImport(page);
+
+  // A file that names no device: the importer takes the file name, and the screen says so.
+  // Assigned to the demo device already on the bench, it joins it as a second condition.
+  await choose(page, [
+    { name: 'ss-run.csv', text: demoWith({ drop: ['device', 'corner'], add: [] }) },
+    { name: 'other.csv', text: DEMO },
+  ]);
+  const ss = row(page, 'ss-run.csv');
+  const device = ss.locator('input[data-cell="device"]');
+  await expect(ss.locator('[data-assumed="device"]')).toBeVisible();
+  await expect(device).not.toHaveValue('nmos_demo');
+  // The bench's devices are offered.
+  await expect(page.locator('#import-devices option[value="nmos_demo"]')).toHaveCount(1);
+  await device.fill('nmos_demo');
+  await expect(ss.locator('[data-assumed="device"]')).toHaveCount(0);
+  await ss.locator('input[data-cell="corner"]').fill('ss');
+  // The second file is named as a device of its own.
+  await row(page, 'other.csv').locator('input[data-cell="device"]').fill('nmos_lvt');
+  await row(page, 'other.csv').locator('input[data-cell="corner"]').fill('ff');
+  await page.locator('[data-import-screen="new"]').screenshot({
+    path: `${SCREENS}/import-screen-device.png`,
+  });
+  await confirmImport(page);
+
+  await expect(page.locator('.fam[data-family="nmos_demo"] .dev')).toHaveCount(2);
+  await expect(page.locator('.fam[data-family="nmos_lvt"] .dev')).toHaveCount(1);
+  const tables = await storedN(page, 3);
+  expect(tables.map((t) => `${t.device}@${t.condition.corner}`).sort()).toEqual([
+    'nmos_demo@ss',
+    'nmos_demo@tt',
+    'nmos_lvt@ff',
+  ]);
+  expect(tables.every((t) => !t.filled.includes('device'))).toBe(true);
+
+  // An empty device is refused on its row, and nothing is applied.
+  await choose(page, [{ name: 'blank.csv', text: DEMO }]);
+  await row(page, 'blank.csv').locator('input[data-cell="device"]').fill('  ');
+  await page.locator('[data-import-confirm]').click();
+  await expect(page.locator('[data-row-error="blank.csv"]')).toContainText('device name');
+  await page.locator('[data-import-cancel]').click();
+  await storedN(page, 3);
+
+  expect(errors).toEqual([]);
+});
+
+test('import screen: a stored table given another device takes its nominal designation along; what bound the old device is unresolved', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await page.goto('/');
+  await page
+    .locator('.load input[type=file]')
+    .setInputFiles(['e2e/fixtures/demo.mostab.csv', 'e2e/fixtures/demo-ss.mostab.csv']);
+  await confirmImport(page);
+
+  // ss designated the demo device's nominal; a sheet block bound to the demo device by name.
+  const chip = (family: string, label: string) =>
+    page.locator(`.fam[data-family="${family}"] .dev[data-variant^="${label}"]`);
+  await chip('nmos_demo', 'ss').locator('.dnom').click();
+  await expect(chip('nmos_demo', 'ss').locator('.dnom')).toHaveText('★ nominal');
+  await chip('nmos_demo', 'tt').locator('.dname').click();
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
+  const dsel = sp.locator('.suse', { hasText: 'cs' }).first().locator('.dsel');
+  const binding = await dsel
+    .locator('option')
+    .evaluateAll((os) =>
+      os.map((o) => (o as HTMLOptionElement).value).find((v) => v.includes('nmos_demo')),
+    );
+  expect(binding).toBeTruthy();
+  await dsel.selectOption(binding!);
+
+  // Move ss to a new device. Its designation goes with it, the demo device's own designation
+  // now names a table it no longer holds and says so, and the block still resolves: tt is left.
+  await page.locator('[data-open-conditions]').click();
+  const screen = page.locator('[data-import-screen="stored"]');
+  const devices = screen.locator('input[data-cell="device"]');
+  await expect(devices).toHaveCount(2);
+  const corners = await screen
+    .locator('input[data-cell="corner"]')
+    .evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
+  await devices.nth(corners.indexOf('ss')).fill('nmos_lvt');
+  await screen.locator('[data-import-confirm]').click();
+  await expect(screen).toHaveCount(0);
+
+  await expect(page.locator('.fam[data-family="nmos_lvt"] .dev')).toHaveCount(1);
+  await expect(
+    page.locator('.fam[data-family="nmos_demo"] [data-nominal-state="unresolved"]'),
+  ).toBeVisible();
+  const notes = page.locator('[data-condition-notes]');
+  await expect(notes).toContainText('device nmos_demo: its designated nominal condition');
+  await expect(notes).not.toContainText('block');
+  const tables = await storedN(page, 2);
+  expect(tables.map((t) => `${t.device}@${t.condition.corner}`).sort()).toEqual([
+    'nmos_demo@tt',
+    'nmos_lvt@ss',
+  ]);
+
+  // Move tt too: the demo device is gone, and the block bound to it is listed with why.
+  await notes.locator('button').click();
+  await page.locator('[data-open-conditions]').click();
+  const corners2 = await screen
+    .locator('input[data-cell="corner"]')
+    .evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
+  await screen.locator('input[data-cell="device"]').nth(corners2.indexOf('tt')).fill('nmos_lvt');
+  await screen.locator('[data-import-confirm]').click();
+  await expect(screen).toHaveCount(0);
+  await expect(page.locator('.fam[data-family="nmos_demo"]')).toHaveCount(0);
+  await expect(page.locator('.fam[data-family="nmos_lvt"] .dev')).toHaveCount(2);
+  // The new device's own designation stands.
+  await expect(chip('nmos_lvt', 'ss').locator('.dnom')).toHaveText('★ nominal');
+  await expect(notes).toContainText('block cs is bound to the device nmos_demo');
+  await expect(notes).toContainText('bind the block to a device again');
 
   expect(errors).toEqual([]);
 });

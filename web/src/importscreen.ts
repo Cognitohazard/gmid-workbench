@@ -16,6 +16,7 @@ import {
   sameCondition,
   valueIn,
   withCondition,
+  withDevice,
   type ConditionDimension,
   type ConditionKey,
   type ConditionValue,
@@ -28,7 +29,8 @@ export interface ImportRow {
   readonly name: string;
   /** The table as imported or stored. */
   readonly table: DeviceTable;
-  /** Each dimension's value as text, by dimension name; '' when the table has none. */
+  /** Each dimension's value as text, by dimension name; '' when the table has none. Under
+   *  `device`, the device the table characterizes. */
   cells: Record<string, string>;
   /** The dimensions whose value the designer typed, or the screen read from the file's header. */
   declared: string[];
@@ -67,7 +69,7 @@ export function rowOf(
   dimensions: readonly ConditionDimension[],
 ): ImportRow {
   const cond = conditionOf(table.id);
-  const cells: Record<string, string> = {};
+  const cells: Record<string, string> = { device: table.id.device };
   for (const n of names(dimensions)) {
     const v = valueIn(cond, n);
     cells[n] = v === undefined ? '' : String(v);
@@ -141,8 +143,8 @@ export function removeDimension(
 }
 
 /**
- * Each row's table under the condition the screen shows: every declared value set (a blank one
- * taken out), and every dimension removed on the screen taken out, through `withCondition`
+ * Each row's table under the device and condition the screen shows: a typed device name through
+ * `withDevice`, every declared value set (a blank one taken out), and every dimension removed on the screen taken out, through `withCondition`
  * against the screen's dimension list. A row the change is refused for carries the reason and
  * gives no table; the caller applies nothing while any row does.
  */
@@ -161,7 +163,10 @@ export function applyRows(
       const text = (r.cells[n] ?? '').trim();
       changes[n] = text === '' ? null : text;
     }
-    const res = withCondition(r.table, changes, dimensions);
+    const moved = r.declared.includes('device')
+      ? withDevice(r.table, r.cells.device ?? '')
+      : ({ ok: true, table: r.table } as const);
+    const res = moved.ok ? withCondition(moved.table, changes, dimensions) : moved;
     tables.push(res.ok ? res.table : undefined);
     return res.ok ? { ...r, error: undefined } : { ...r, error: res.error };
   });
@@ -195,16 +200,16 @@ export function followCornerKeys(
 }
 
 /**
- * The composed blocks in a sheet, at any depth, whose device binding names one table by its
- * uid: written before bindings named devices, such a binding is to the table, and a table under
- * a new condition has a new uid. Each is given by its path of block names.
+ * The composed blocks in a sheet, at any depth, whose device binding is exactly `binding`: a
+ * table's uid (a binding written before bindings named devices, which a table under a new
+ * condition no longer answers to) or a device's. Each is given by its path of block names.
  */
-export function blocksNamingTable(doc: SheetDoc | undefined, uid: string, at = ''): string[] {
+export function blocksBoundTo(doc: SheetDoc | undefined, binding: string, at = ''): string[] {
   const out: string[] = [];
   for (const b of doc?.blocks ?? []) {
     const path = at ? `${at}.${b.name}` : b.name;
-    if (b.device === uid) out.push(path);
-    out.push(...blocksNamingTable(b.doc, uid, path));
+    if (b.device === binding) out.push(path);
+    out.push(...blocksBoundTo(b.doc, binding, path));
   }
   return out;
 }

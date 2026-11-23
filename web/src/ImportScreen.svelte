@@ -19,6 +19,7 @@
     rows: initialRows,
     dimensions: initialDimensions,
     failed = [],
+    devices = [],
     onconfirm,
     oncancel,
   }: {
@@ -28,6 +29,8 @@
     dimensions: readonly ConditionDimension[];
     /** Files in the batch that could not be read, by name, with why. */
     failed?: readonly { name: string; error: string }[];
+    /** The devices on the bench, by name: offered when a row's device is changed. */
+    devices?: readonly string[];
     /** Apply the screen. Returns, per row, why the bench refuses that row's new table (or
      *  undefined); when none is refused the bench has applied every row. */
     onconfirm: (
@@ -49,6 +52,12 @@
   let addError = $state<string | null>(null);
 
   const dimNames = $derived(dimensions.map((d) => dimensionName(d.name)));
+  /** Every device a row can be assigned to without typing it: the bench's and the batch's. */
+  const deviceChoices = $derived(
+    [...new Set([...devices, ...rows.map((r) => (r.cells.device ?? '').trim())])].filter(
+      (n) => n !== '',
+    ),
+  );
   /** Headers the files declared that are not dimensions yet: what a designer is likely to add. */
   const offered = $derived(
     [
@@ -117,7 +126,8 @@
 >
   <h2>{mode === 'new' ? 'Import tables' : 'Conditions of the loaded tables'}</h2>
   <p class="lead">
-    One row per table: its device and the condition it was characterized at. A value marked
+    One row per table: the device it characterizes — pick one on the bench or name a new one — and
+    the condition it was characterized at. A value marked
     <span class="assumed-tag">assumed</span> was filled in because the file does not declare it; type
     a value to declare it.
   </p>
@@ -147,8 +157,17 @@
           <tr data-row={r.name} class:bad={!!r.error}>
             <td class="file">{r.name}</td>
             <td class="device">
-              {r.table.id.device}{#if r.table.meta.filled?.includes('device')}<span
-                  class="assumed-tag">assumed</span
+              <input
+                data-cell="device"
+                class:assumed={isAssumed(r, 'device')}
+                list="import-devices"
+                value={r.cells.device ?? ''}
+                placeholder="device"
+                aria-label="{r.name} device"
+                oninput={(e) =>
+                  (rows[i] = typed(r, 'device', (e.currentTarget as HTMLInputElement).value))}
+              />{#if isAssumed(r, 'device')}<span class="assumed-tag" data-assumed="device"
+                  >assumed</span
                 >{/if}
             </td>
             {#each dimNames as n (n)}
@@ -174,6 +193,9 @@
         {/each}
       </tbody>
     </table>
+    <datalist id="import-devices">
+      {#each deviceChoices as d (d)}<option value={d}></option>{/each}
+    </datalist>
   </div>
   {#if failed.length}
     <ul class="failed">

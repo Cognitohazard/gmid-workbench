@@ -18,6 +18,7 @@ import {
   tableAt,
   tableTempC,
   withCondition,
+  withDevice,
 } from './index';
 import type { ConditionDimension, DeviceTable, ImportHints } from './types';
 
@@ -383,5 +384,25 @@ describe('a table given a new condition', () => {
     expect(withCondition(t, { temp: 'hot' }).ok).toBe(false);
     expect(withCondition(t, { temp: Infinity }).ok).toBe(false);
     expect(withCondition(t, { vdd: 'high' }, CORNER_TEMP_VDD).ok).toBe(false);
+  });
+});
+
+describe('a table assigned to another device', () => {
+  it('keeps its condition and data, and the device is declared from then on', () => {
+    const old = importOk(file({ corner: 'ss', temp: 85 }), { filename: 'nch.csv' }).table;
+    expect(old.meta.filled).toEqual(['device']);
+    const r = withDevice(old, '  nmos_lvt ');
+    if (!r.ok) throw new Error(r.error);
+    expect(r.table.id.device).toBe('nmos_lvt');
+    expect(conditionOf(r.table.id)).toEqual(conditionOf(old.id));
+    expect(r.table.grid).toBe(old.grid);
+    expect(r.table.meta.filled).toBeUndefined();
+    expect(old.id.device).not.toBe('nmos_lvt');
+  });
+
+  it('refuses an empty name', () => {
+    const old = importOk(file({ device: 'n' })).table;
+    const r = withDevice(old, '   ');
+    expect(r.ok).toBe(false);
   });
 });

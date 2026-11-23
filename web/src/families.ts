@@ -41,7 +41,10 @@ export interface Bench {
  *  `deviceLookup`), and only this form is ever written. */
 const FAMILY_PREFIX = 'family:';
 
-const deviceBinding = (f: CharacterizedDevice): string => FAMILY_PREFIX + f.deviceUid;
+/** The binding a sheet writes for the device with this identity. */
+export const bindingOfDevice = (deviceUid: string): string => FAMILY_PREFIX + deviceUid;
+
+const deviceBinding = (f: CharacterizedDevice): string => bindingOfDevice(f.deviceUid);
 
 /**
  * Group the loaded tables, with the bench's designations and its table identity.
