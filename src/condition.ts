@@ -72,6 +72,26 @@ export function conditionKeyOf(of: TableId | ConditionKey): ConditionKey {
   return out;
 }
 
+/**
+ * One stored condition key, read from untrusted data (a saved layout), canonicalized; undefined
+ * when it cannot name a condition. An array is not a key. A `corner` that is not text, or a
+ * `temp` that is not a finite number, can never match a table, so the key is dropped. Any other
+ * field whose value is not text or a finite number is left out and the rest of the key kept; a
+ * `device` field is left out too, since a device is never a dimension of a condition.
+ */
+export function sanitizeConditionKey(raw: unknown): ConditionKey | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const fields: Record<string, ConditionValue> = {};
+  for (const [name, v] of Object.entries(raw)) {
+    const n = dimensionName(name);
+    if (n === 'device') continue;
+    if (n === 'corner' && typeof v !== 'string') return undefined;
+    if (n === 'temp' && !(typeof v === 'number' && Number.isFinite(v))) return undefined;
+    if (typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v))) fields[name] = v;
+  }
+  return Object.keys(fields).length ? conditionKeyOf(fields) : undefined;
+}
+
 /** Key equality — the ONE comparison every consumer shares, so grouping, projection,
  *  duplicate detection and persisted selections can never disagree about what one condition
  *  is. Two keys are one condition when they name the same dimensions and hold the same value,

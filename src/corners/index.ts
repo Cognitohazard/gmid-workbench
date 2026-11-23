@@ -53,6 +53,7 @@ export {
   conditionOf,
   dimensionName,
   sameCondition,
+  sanitizeConditionKey,
   tableTempC,
 } from '../condition';
 import {

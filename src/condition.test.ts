@@ -13,6 +13,7 @@ import {
   conditionOf,
   groupDevices,
   sameCondition,
+  sanitizeConditionKey,
   tableAt,
   tableTempC,
 } from './index';
@@ -48,6 +49,36 @@ const CORNER_TEMP_VDD: ConditionDimension[] = [
   { name: 'temp', kind: 'number', unit: '°C', fill: 27 },
   VDD,
 ];
+
+describe('a stored condition key read back', () => {
+  it('is not an array', () => {
+    expect(sanitizeConditionKey(['tt', 27])).toBeUndefined();
+  });
+
+  it('drops a key whose corner is not text or whose temperature is not a number', () => {
+    expect(sanitizeConditionKey({ corner: 'tt', temp: '27' })).toBeUndefined();
+    expect(sanitizeConditionKey({ corner: 1, temp: 27 })).toBeUndefined();
+    expect(sanitizeConditionKey({ corner: 'tt', temp: Number.NaN })).toBeUndefined();
+  });
+
+  it('keeps the valid fields when another field is null, an object or a boolean', () => {
+    expect(sanitizeConditionKey({ corner: 'TT', temp: 27, x: null, y: {}, z: true })).toStrictEqual(
+      { corner: 'tt', temp: 27 },
+    );
+  });
+
+  it('leaves a device field out', () => {
+    expect(sanitizeConditionKey({ device: 'nch', corner: 'ss', vdd: 1.8 })).toStrictEqual({
+      corner: 'ss',
+      vdd: 1.8,
+    });
+  });
+
+  it('is undefined when no field names a condition', () => {
+    expect(sanitizeConditionKey({ x: null })).toBeUndefined();
+    expect(sanitizeConditionKey(null)).toBeUndefined();
+  });
+});
 
 describe('a table stored before conditions were records', () => {
   const demo = generateDemoDevice();

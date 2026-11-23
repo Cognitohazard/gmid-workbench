@@ -10,7 +10,7 @@ import {
   type DeviceTable,
   type SheetDoc,
   conditionKeyId,
-  conditionKeyOf,
+  sanitizeConditionKey,
   conditionOf,
   conditionPart,
   type ConditionKey,
@@ -228,19 +228,8 @@ export function sanitizeConditionKeys(v: unknown): ConditionKey[] {
   const out: ConditionKey[] = [];
   const seen = new Set<string>();
   for (const raw of v) {
-    if (!raw || typeof raw !== 'object') continue;
-    // A table's device is never a dimension of its condition.
-    const entries = Object.entries(raw as Record<string, unknown>).filter(
-      ([n]) => n.trim().toLowerCase() !== 'device',
-    );
-    if (
-      !entries.length ||
-      !entries.every(
-        ([, x]) => typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x)),
-      )
-    )
-      continue;
-    const key = conditionKeyOf(Object.fromEntries(entries) as ConditionKey);
+    const key = sanitizeConditionKey(raw);
+    if (!key) continue;
     const id = conditionKeyId(key);
     if (seen.has(id)) continue;
     seen.add(id);
