@@ -10,7 +10,7 @@
 import type { LevelRefusal, QAWarning } from '../types';
 import { compileExpr } from '../derive';
 import { CONSTANTS } from '../constants';
-import { createEngine } from '../expr';
+import { createEngine, scalarScope } from '../expr';
 import { BINDABLE, bindProblem } from '../device';
 import { PER_WIDTH_KEYS, TABLE_AFFIX, affixedColumn } from '../namespace';
 import { HELD_AT_A_RANGE_END, heldShape } from './coverage';
@@ -33,6 +33,8 @@ import {
   PATH_SEP,
   blockPath,
   idSepProblem,
+  AXES_LOCATION,
+  axisOrder,
   MAX_BLOCK_DEPTH,
   docExpressions,
   engineSolved,
@@ -645,6 +647,11 @@ function edgesOf(lv: Level, name: string, sized: boolean, policy: TraversalPolic
         const sub: unknown = e.set?.[name];
         if (typeof sub === 'string') out.push({ kind: 'set', lv, names: namesOf(sub) });
       }
+    if (policy.rangeEndSets && lv.path === '' && Array.isArray(lv.doc.operatingAxes))
+      for (const a of lv.doc.operatingAxes)
+        if (a?.param === name)
+          for (const sub of [a.lo, a.hi] as unknown[])
+            if (typeof sub === 'string') out.push({ kind: 'set', lv, names: namesOf(sub) });
     return out;
   }
   const equation = lv.doc.equations.find((r) => r.name === name);
@@ -1535,10 +1542,19 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
       .filter((lv) => heldOnGate(lv.doc, balancedHere(lv)))
       .map((lv) => blockPath(lv.path)),
   );
-  for (const e of doc.operatingRange ?? []) {
+  // Each named end, and the axes together: every corner moves the same params.
+  const claims = (doc.operatingRange ?? []).flatMap((e) => {
     const name = e.name?.trim();
-    if (!name) continue; // shape errors are named above; this check needs a usable name
-    for (const { path, givens, reached } of reachedGivens(doc, Object.keys(e.set ?? {}))) {
+    // Shape errors are named above; this check needs a usable name.
+    return name ? [{ who: `range end "${name}"`, at: name, moves: Object.keys(e.set ?? {}) }] : [];
+  });
+  const axes = (Array.isArray(doc.operatingAxes) ? doc.operatingAxes : []).filter(
+    (a) => typeof a?.param === 'string',
+  );
+  if (axes.length)
+    claims.push({ who: 'the operating axes', at: AXES_LOCATION, moves: axes.map((a) => a.param) });
+  for (const { who, at, moves } of claims) {
+    for (const { path, givens, reached } of reachedGivens(doc, moves)) {
       const readsMoved = (expr: unknown): boolean =>
         typeof expr === 'string' && namesOf(expr).some((n) => reached.has(n));
       const keyMoved = (k: string): boolean =>
@@ -1550,10 +1566,10 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
         rule: 'sheet-range',
         severity: 'info',
         message:
-          `range end "${name}" moves the ${quoted(point)} of ${where}, whose current is read ` +
+          `${who} moves the ${quoted(point)} of ${where}, whose current is read ` +
           `from the table rather than given — that current is different there, and so is any ` +
           `current derived from it`,
-        location: name,
+        location: at,
       });
       if (givens.W !== undefined) {
         // Width-first givens are left exactly as authored at a range end, which makes two
@@ -1580,10 +1596,10 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
             rule: 'sheet-range',
             severity: 'warning',
             message:
-              `range end "${name}" moves the ${quoted(geometry)} of ${where} — it sizes a ` +
+              `${who} moves the ${quoted(geometry)} of ${where} — it sizes a ` +
               `DIFFERENT transistor there, so what it reports is not this design measured at ` +
               `another condition`,
-            location: name,
+            location: at,
           });
         // The warning below is about an operating-point SPEC kept across the move — a gm/ID held
         // where a gate-tied device would keep its voltage. Givens that state the gate voltage keep
@@ -1599,10 +1615,10 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
             rule: 'sheet-range',
             severity: 'warning',
             message:
-              `range end "${name}" reaches ${where}, which fix a width, through ${quoted(bias)} — ` +
+              `${who} reaches ${where}, which fix a width, through ${quoted(bias)} — ` +
               `width-first givens keep their authored operating-point spec at a range end, which ` +
               `holds the same device only when the end moves vds alone`,
-            location: name,
+            location: at,
           });
         // Given a width and no current, the device's current is whatever the table says at its
         // operating point — a mirror's output device. Where the range end moves that point, the
@@ -1627,10 +1643,10 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
           rule: 'sheet-range',
           severity: 'info',
           message:
-            `range end "${name}" changes the current in ${where}: its expression reads ` +
+            `${who} changes the current in ${where}: its expression reads ` +
             `${quoted(through)}, which ${through.length > 1 ? 'move' : 'moves'} there, so the ` +
             `device is held at its width and carries a different current`,
-          location: name,
+          location: at,
         });
       }
     }
@@ -2179,7 +2195,7 @@ export function setReads(doc: SheetDoc, expr: unknown): string[] {
 /** The operating range's problems: each range end's shape, then what it reaches (see
  *  complianceReach). */
 function rangeProblems(doc: SheetDoc): QAWarning[] {
-  const out: QAWarning[] = [];
+  const out: QAWarning[] = [...axisProblems(doc)];
   // The operating range: structural checks only — whether the overridden evaluation complies
   // is eval's verdict, not a shape question.
   if (doc.operatingRange?.length) {
@@ -2205,12 +2221,15 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
         });
       }
       rangeEndNames.add(name);
-      const sep = idSepProblem(name);
+      const sep = idSepProblem(name) ?? (name.includes('=') ? '=' : undefined);
       if (sep) {
         out.push({
           rule: 'sheet-range',
           severity: 'error',
-          message: `range end name "${name}" must not contain "${sep}" — it becomes part of tree-keyed check ids`,
+          message:
+            sep === '='
+              ? `range end name "${name}" must not contain "=" — a corner of the operating axes is named with it`
+              : `range end name "${name}" must not contain "${sep}" — it becomes part of tree-keyed check ids`,
           location: name,
         });
       }
@@ -2267,7 +2286,103 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
         }
       }
     }
-    out.push(...complianceReach(doc));
+  }
+  if (doc.operatingRange?.length || doc.operatingAxes?.length) out.push(...complianceReach(doc));
+  return out;
+}
+
+/** The constant scope a design-point read of an axis's ends evaluates against. */
+const AXIS_ENGINE = createEngine();
+
+/**
+ * The operating axes' problems: each axis's shape, the param it moves, what its ends read, an
+ * order the ends can be read in, and a design value that lies outside its own axis. Every finding
+ * is about every corner the axes span, so each is located at AXES_LOCATION.
+ */
+function axisProblems(doc: SheetDoc): QAWarning[] {
+  if (doc.operatingAxes === undefined) return [];
+  const out: QAWarning[] = [];
+  const error = (message: string): void => {
+    out.push({ rule: 'sheet-range', severity: 'error', message, location: AXES_LOCATION });
+  };
+  if (!Array.isArray(doc.operatingAxes)) {
+    error('the operating axes must be a list of {param, lo, hi}');
+    return out;
+  }
+  const paramByName = new Map(doc.params.map((p) => [p.name, p]));
+  const seen = new Set<string>();
+  let readable = true;
+  for (const a of doc.operatingAxes as unknown[]) {
+    if (!isObject(a) || typeof a.param !== 'string' || !a.param.trim()) {
+      error('an operating axis has no param — name the param it moves');
+      readable = false;
+      continue;
+    }
+    const param = a.param;
+    if (seen.has(param)) error(`the operating axes move "${param}" twice — give it one axis`);
+    seen.add(param);
+    const p = paramByName.get(param);
+    if (!p) error(`the operating axis "${param}" moves a name that is not a param of this sheet`);
+    else if (engineSolved(p) || holds(p))
+      error(
+        engineSolved(p)
+          ? `the operating axis "${param}" moves a param the engine solves — the solve would discard it`
+          : `the operating axis "${param}" moves a param that carries hold — a corner re-solves it, so the value would be discarded`,
+      );
+    for (const end of ['lo', 'hi'] as const) {
+      const expr = a[end];
+      if (typeof expr !== 'string' || !parses(expr)) {
+        error(`the operating axis "${param}": its ${end} end does not parse`);
+        readable = false;
+        continue;
+      }
+      const read = setReads(doc, expr);
+      if (read.length)
+        error(
+          `the operating axis "${param}" reads ${quoted(read)} at its ${end} end, which ` +
+            `${read.length > 1 ? 'are' : 'is'} not a typed value — an axis is defined by ` +
+            `numbers the designer gives: type the value`,
+        );
+    }
+  }
+  const { cycle } = axisOrder(doc);
+  if (cycle) {
+    error(
+      cycle.length === 1
+        ? `the operating axis "${cycle[0]}" reads its own param at an end — type its ends`
+        : `the operating axes ${quoted(cycle)} read each other's params at their ends — ` +
+            `there is no order to set them in`,
+    );
+    return out;
+  }
+  if (!readable || out.length) return out;
+  // The design point should lie inside its own range: read each axis's ends at the design values.
+  const design: Record<string, number> = Object.fromEntries(
+    doc.params.filter((p) => Number.isFinite(p.value)).map((p) => [p.name, p.value]),
+  );
+  const scope = scalarScope(design);
+  for (const a of doc.operatingAxes) {
+    const at = (expr: string): number | undefined => {
+      try {
+        const v = AXIS_ENGINE.compile(expr).eval(scope);
+        return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const lo = at(a.lo);
+    const hi = at(a.hi);
+    const v = design[a.param];
+    if (lo === undefined || hi === undefined || v === undefined) continue;
+    if (v < Math.min(lo, hi) || v > Math.max(lo, hi))
+      out.push({
+        rule: 'sheet-range',
+        severity: 'warning',
+        message:
+          `the design value of "${a.param}", ${v}, lies outside its operating axis, ` +
+          `${lo} to ${hi} — every corner still runs`,
+        location: AXES_LOCATION,
+      });
   }
   return out;
 }
@@ -2451,7 +2566,7 @@ function blockProblems(doc: SheetDoc, depth: number, open: OpenRanges | undefine
         // child's spec params, which would make the child's own range claim a fiction —
         // so the engine ignores them, and this says so rather than letting the author
         // believe the child's operating range still gates.
-        if (block.doc.operatingRange?.length) {
+        if (block.doc.operatingRange?.length || block.doc.operatingAxes?.length) {
           out.push({
             rule: 'sheet-range',
             severity: 'warning',

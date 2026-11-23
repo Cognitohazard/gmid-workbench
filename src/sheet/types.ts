@@ -924,6 +924,121 @@ export interface SheetRangeEnd {
   note?: string;
 }
 
+/**
+ * One axis of the sheet's claimed operating range: a typed param that may take any value from `lo`
+ * to `hi`. The axes together claim every corner of that box (see rangePoints): each corner is one
+ * more evaluation of the design point's hardware, like a named range end, with every axis param set
+ * to one of its two ends. `lo` and `hi` are expressions over numbers, constants, typed params and
+ * other axes' params, so one axis's end may follow another's (`hi: "VDD - 0.45"`); an end that reads
+ * another axis takes that axis's value at the same corner.
+ */
+export interface SheetAxis {
+  param: string;
+  lo: string;
+  hi: string;
+  note?: string;
+}
+
+/** One point the operating range claims: a corner of the axes, or a named range end. `set` maps
+ *  each param it sets to the expression that sets it, still unevaluated, in the order the engine
+ *  evaluates them (an axis after the axes its ends read). `corner` is the end each axis is at,
+ *  in axis order; absent on a named end. */
+export interface RangePoint {
+  name: string;
+  set: Record<string, string>;
+  corner?: readonly { param: string; end: 'lo' | 'hi' }[];
+}
+
+/** Which end of each axis a corner is at, with the value it took there, in axis order. */
+export type CornerKey = readonly { param: string; end: 'lo' | 'hi'; value?: number }[];
+
+/** Separator between one axis's end and the next in a corner's name (`VDD=lo,CM_dc=hi`). */
+export const CORNER_SEP = ',';
+
+/** Where a finding about the operating axes is located: it is about every corner they span. */
+export const AXES_LOCATION = 'operatingAxes';
+
+/** The well-formed axes of a doc: entries with a string param and string ends. */
+const axesOf = (doc: Pick<SheetDoc, 'operatingAxes'>): SheetAxis[] =>
+  (Array.isArray(doc.operatingAxes) ? doc.operatingAxes : []).filter(
+    (a) => isObject(a) && typeof a.param === 'string',
+  );
+
+/**
+ * The axes in the order their ends can be evaluated: an axis after every axis whose param its `lo`
+ * or `hi` reads, document order breaking ties. `cycle` names the axes, in reading order, that read
+ * each other round a loop where there is no such order; `order` is then document order.
+ */
+export function axisOrder(doc: Pick<SheetDoc, 'operatingAxes'>): {
+  order: SheetAxis[];
+  cycle?: string[];
+} {
+  const axes = axesOf(doc);
+  const params = new Set(axes.map((a) => a.param));
+  const reads = new Map(
+    axes.map((a) => [
+      a.param,
+      new Set([...namesOf(a.lo), ...namesOf(a.hi)].filter((n) => params.has(n) && n !== a.param)),
+    ]),
+  );
+  const order: SheetAxis[] = [];
+  const placed = new Set<string>();
+  while (order.length < axes.length) {
+    const next = axes.find(
+      (a) => !placed.has(a.param) && [...(reads.get(a.param) ?? [])].every((n) => placed.has(n)),
+    );
+    if (!next) break;
+    order.push(next);
+    placed.add(next.param);
+  }
+  if (order.length === axes.length) {
+    // An axis whose ends read its own param is a cycle of one.
+    const self = axes.find((a) => [...namesOf(a.lo), ...namesOf(a.hi)].includes(a.param));
+    return self ? { order: axes, cycle: [self.param] } : { order };
+  }
+  // Walk the reads from an unplaced axis until a name repeats: the walk from that name's first visit
+  // is the cycle.
+  const seen: string[] = [];
+  let at = axes.find((a) => !placed.has(a.param))!.param;
+  while (!seen.includes(at)) {
+    seen.push(at);
+    at = [...(reads.get(at) ?? [])].find((n) => !placed.has(n))!;
+  }
+  return { order: axes, cycle: seen.slice(seen.indexOf(at)) };
+}
+
+/**
+ * Every point the operating range claims, in the one order every reader uses: the corners of the
+ * axes first, 2^n of them with the first axis slowest, then the named range ends in document order.
+ * A corner is named by the end of each axis it is at (`VDD=lo,CM_dc=hi`); a named end by its name.
+ */
+export function rangePoints(doc: Pick<SheetDoc, 'operatingAxes' | 'operatingRange'>): RangePoint[] {
+  const axes = axesOf(doc);
+  const { order } = axisOrder(doc);
+  const corners: RangePoint[] = [];
+  if (axes.length) {
+    for (let i = 0; i < 2 ** axes.length; i++) {
+      const corner = axes.map((a, k) => ({
+        param: a.param,
+        end: ((i >> (axes.length - 1 - k)) & 1 ? 'hi' : 'lo') as 'lo' | 'hi',
+      }));
+      const endOf = new Map(corner.map((c) => [c.param, c.end]));
+      corners.push({
+        name: corner.map((c) => `${c.param}=${c.end}`).join(CORNER_SEP),
+        set: Object.fromEntries(
+          order.map((a) => [a.param, endOf.get(a.param) === 'hi' ? a.hi : a.lo]),
+        ),
+        corner,
+      });
+    }
+  }
+  const ends = (Array.isArray(doc.operatingRange) ? doc.operatingRange : []).map((e) => ({
+    name: e?.name,
+    set: isObject(e?.set) ? (e.set as Record<string, string>) : {},
+  }));
+  return [...corners, ...ends];
+}
+
 /** Separator between a range end's name and a check id in range-end-qualified ids
  *  (`cm-lo@sr-spec`). */
 export const RANGE_END_SEP = '@';
@@ -975,6 +1090,9 @@ export interface SheetDoc {
   blocks?: SheetBlock[];
   provides?: string[];
   operatingRange?: SheetRangeEnd[];
+  /** The axes of the claimed operating range (see SheetAxis): every corner of them is checked
+   *  before the named range ends. */
+  operatingAxes?: SheetAxis[];
   /**
    * The document format. Absent: the earlier format, which knows none of the keys below — a
    * document in it is still read, but a sized device in it is refused until it is migrated, since
@@ -1041,9 +1159,15 @@ export const BLOCK_KEYS: ReadonlySet<string> = new Set<string>([
   'name', 'doc', 'ref', 'device', 'params', ...WIRING_BLOCK_KEYS,
 ]); // prettier-ignore
 export const RANGE_END_KEYS: ReadonlySet<string> = new Set<string>(['name', 'set', 'note']);
+export const OPERATING_AXIS_KEYS: ReadonlySet<string> = new Set<string>([
+  'param',
+  'lo',
+  'hi',
+  'note',
+]);
 export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
   'title', 'description', 'polarity', 'params', 'givens', 'equations', 'checks', 'blocks',
-  'provides', 'operatingRange', 'formatVersion', ...WIRING_DOC_KEYS,
+  'provides', 'operatingRange', 'operatingAxes', 'formatVersion', ...WIRING_DOC_KEYS,
 ]); // prettier-ignore
 /** Keys a block no longer carries in any format: the gate `wiring` of documents written before the
  *  netlist, which `nodes` state in format version 2. Named, so a document that still carries one
@@ -1053,7 +1177,7 @@ export const EARLIER_BLOCK_KEYS: readonly string[] = ['wiring'];
 /**
  * Every authored expression in a doc, in one flat list: the givens, constrained and solved params,
  * the equations, both sides of every check, each block's param overrides,
- * each range end's setting, each held level, and each element value and analysis frequency
+ * each range end's setting, each axis's two ends, each held level, and each element value and analysis frequency
  * written as an expression. Lives HERE for the same reason the key sets above do: a consumer
  * keeping its own copy of which fields hold expressions goes silently stale the day a field
  * is added — so a new expression-bearing field joins this walk in the same edit that adds it
@@ -1075,6 +1199,7 @@ export function docExpressions(doc: SheetDoc): string[] {
   for (const r of doc.checks) out.push(r.lhs, r.rhs);
   for (const u of doc.blocks ?? []) out.push(...Object.values(u.params ?? {}));
   for (const e of doc.operatingRange ?? []) out.push(...Object.values(e.set));
+  for (const a of doc.operatingAxes ?? []) out.push(a.lo, a.hi);
   // Read as `unknown` where a persisted document may carry the wrong shape; validation names it.
   const levels: unknown = doc.levels;
   if (isObject(levels))
@@ -1269,6 +1394,8 @@ export interface NodesReport {
  */
 export interface RangeEndReport {
   name: string;
+  /** On a corner of the axes: the end each axis is at and the value it took, in axis order. */
+  corner?: CornerKey;
   /**
    * Which of FOUR outcomes this range end reached. `complies` / `does-not-comply` are verdicts
    * about the held design, measured at this end. The other two are not verdicts and must never
@@ -1334,14 +1461,16 @@ export type PointState = 'complies' | 'does-not-comply' | 'no-answer' | 'not-run
  * quantity, the one with the lowest value is the low end and the one with the highest the high
  * end. An end that is neither — the only one, a tie, one in between, a value not known — says its
  * authored name instead (`CM_dc = 1.2 V, range end cm-mid`). An end that fixes several quantities
- * names them all and is placed by the first. Keyed by the end's name; every declared end has an
- * entry.
+ * names them all and is placed by the first. A corner of the operating axes names the value of
+ * each axis param there and the end of each axis it takes (`CM_dc = 1 V, the low end of the CM_dc
+ * axis`). Keyed by the end's name; every corner and every declared end has an entry.
  */
 export function rangeEndNames(
-  doc: Pick<SheetDoc, 'params' | 'operatingRange'>,
+  doc: Pick<SheetDoc, 'params' | 'operatingRange' | 'operatingAxes'>,
   reports: readonly Pick<RangeEndReport, 'name' | 'set'>[] = [],
 ): Map<string, string> {
-  const ends = Array.isArray(doc.operatingRange) ? doc.operatingRange : [];
+  const points = rangePoints(doc);
+  const ends = points.filter((p) => !p.corner);
   const params = new Map((Array.isArray(doc.params) ? doc.params : []).map((p) => [p.name, p]));
   const valueOf = (expr: string, resolved: number | undefined): number | undefined => {
     if (resolved !== undefined && Number.isFinite(resolved)) return resolved;
@@ -1360,6 +1489,25 @@ export function rangeEndNames(
     }));
   });
   const names = new Map<string, string>();
+  const quantity = (param: string, expr: string, resolved: number | undefined): string => {
+    const value = valueOf(expr, resolved);
+    return value === undefined
+      ? `${param} = ${expr}`
+      : `${param} = ${formatQuantity(value, params.get(param)?.unit)}`;
+  };
+  // A corner is placed by its axes: the end of each axis it takes, in axis order.
+  for (const c of points) {
+    if (!c.corner) continue;
+    const report = reports.find((r) => r.name === c.name);
+    const quantities = c.corner.map(({ param }) =>
+      quantity(param, c.set[param], report?.set[param]),
+    );
+    const which =
+      c.corner.length === 1
+        ? `the ${c.corner[0].end === 'lo' ? 'low' : 'high'} end of the ${c.corner[0].param} axis`
+        : `the corner at ${c.corner.map((k) => `${k.end === 'lo' ? 'low' : 'high'} ${k.param}`).join(', ')}`;
+    names.set(c.name, [...quantities, which].join(', '));
+  }
   ends.forEach((e, i) => {
     const first = fixed[i][0];
     const peers = first
@@ -1377,11 +1525,7 @@ export function rangeEndNames(
           : first.value === hi && once(hi)
             ? 'high'
             : undefined;
-    const quantities = fixed[i].map(({ param, expr, value }) =>
-      value === undefined
-        ? `${param} = ${expr}`
-        : `${param} = ${formatQuantity(value, params.get(param)?.unit)}`,
-    );
+    const quantities = fixed[i].map(({ param, expr, value }) => quantity(param, expr, value));
     const which = end
       ? `the ${end} end of the claimed ${first.param} range`
       : `range end ${e.name}`;
@@ -1801,7 +1945,7 @@ export const rangeEndBroke = (e: RangeEndReport): boolean =>
 /** The same doc with its operating range dropped, so an evaluation of it answers feasibility
  *  alone and never enters the range-end runs. Structural. */
 export function withoutRange(doc: SheetDoc): SheetDoc {
-  const { operatingRange: _range, ...rest } = doc;
+  const { operatingRange: _range, operatingAxes: _axes, ...rest } = doc;
   return rest;
 }
 
@@ -2155,6 +2299,10 @@ export interface SweepWindow {
 export interface SheetSweep {
   param: string;
   unit: string;
+  /** Whether each sample was asked at every point of the operating range (rangePoints) as well
+   *  as at the design point (SweepOptions.range). Not checked, each sample is the design point
+   *  alone and its window is the design point's. */
+  range: 'checked' | 'not-checked';
   x: number[];
   checks: SheetSweepCheck[];
   feasible: boolean[];
@@ -2211,9 +2359,14 @@ export interface SheetSweep2 {
   paramY: string;
   unitX: string;
   unitY: string;
+  /** Whether each cell was asked at every point of the operating range (Sweep2Options.range). */
+  range: 'checked' | 'not-checked';
   x: number[];
   y: number[];
   feasible: boolean[][];
+  /** Where the range is checked: each cell's report at every point of the operating range,
+   *  `[yi][xi][k]` in rangePoints order. Absent where it is not checked. */
+  rangeEnds?: RangeEndReport[][][];
   /** Each cell's verdict, `[yi][xi]`: the verdict a run of the sheet at those values reads. */
   verdicts: DesignVerdict[][];
   binding: (string | null)[][];

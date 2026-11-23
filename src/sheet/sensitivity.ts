@@ -18,6 +18,7 @@ import {
   sweepable,
   treeCheckResults,
   withoutRange,
+  rangePoints,
   withParams,
 } from './types';
 import type {
@@ -175,19 +176,22 @@ export function sheetSensitivities(
     );
   }
 
-  // Only a check that lives ON a range end is worth re-checking compliance at every range end for;
-  // see SensitivityOptions.check.
-  const probeDoc = opts.check?.includes(RANGE_END_SEP) ? r.doc : withoutRange(r.doc);
-  const at = (over: Record<string, number>): SheetResult =>
-    evaluateSheet(withParams(probeDoc, over), table, resolveDevice, { settings: opts.settings });
-
-  // A probe has to have completed wherever it is read. The probe doc carries range ends only
-  // when the check in question lives on one, and then THAT end leaving no outcomes is a probe
-  // with nothing to difference, exactly like a base run that did not stand. Another range end
-  // having no answer is no obstacle: its checks are simply not among the ones read.
+  // Only a check that lives ON a point of the operating range is worth asking a point for, and then
+  // only that point (found by its key among rangePoints): each probe is two evaluations, the design
+  // point and that one point. See SensitivityOptions.check.
   const end = opts.check?.includes(RANGE_END_SEP)
     ? opts.check.slice(0, opts.check.indexOf(RANGE_END_SEP))
     : undefined;
+  const onPoint = end !== undefined && rangePoints(r.doc).some((pt) => pt.name === end);
+  const probeDoc = onPoint ? r.doc : withoutRange(r.doc);
+  const at = (over: Record<string, number>): SheetResult =>
+    evaluateSheet(withParams(probeDoc, over), table, resolveDevice, {
+      settings: opts.settings,
+      ...(onPoint ? { rangePoint: end } : {}),
+    });
+
+  // A probe has to have completed wherever it is read: the one point it asks leaving no outcomes
+  // is a probe with nothing to difference, exactly like a base run that did not stand.
   const endBroke = (res: SheetResult): boolean =>
     (res.rangeEnds ?? []).some((e) => e.name === end && !isComplete(e));
   const whole = (res: SheetResult): boolean => isComplete(res) && !endBroke(res);

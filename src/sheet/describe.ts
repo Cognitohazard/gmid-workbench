@@ -9,6 +9,7 @@ import { shown } from './linear';
 import { formatQuantity } from '../units';
 import {
   andList,
+  AXES_LOCATION,
   blockMessage,
   FORMAT_VERSION,
   REGION_CHECK_ID,
@@ -1182,7 +1183,9 @@ function entryLine(entry: NonNullable<NotReadData['entry']>, where: string): Lin
     case 'range-end':
       return where === 'operatingRange'
         ? t`A range end of the operating range is not well formed.`
-        : t`Range end ${n} is not well formed.`;
+        : where === AXES_LOCATION
+          ? t`The operating axes are not well formed.`
+          : t`Range end ${n} is not well formed.`;
   }
 }
 

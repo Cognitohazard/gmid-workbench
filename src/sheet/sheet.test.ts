@@ -4702,7 +4702,7 @@ describe('operating range — the held design asked at each range end, apart fro
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(true);
     expect(res.rangeEnds?.[1].state).toBe('does-not-comply');
-    const sw = sweepSheet(doc, 'x_floor', dev, 2);
+    const sw = sweepSheet(doc, 'x_floor', dev, 2, undefined, undefined, { range: 'checked' });
     const hiCurve = sw.checks.find((r) => r.id === 'hi@');
     // A hard requirement that gives no number leaves the end undetermined, not failing: the curve
     // has a gap there, and never a non-negative margin.
@@ -4785,7 +4785,7 @@ describe('operating range — the held design asked at each range end, apart fro
 
   it('a swept sample agrees with the same values evaluated alone, and a range end never moves feasibility', () => {
     const doc = mk();
-    const sw = sweepSheet(doc, 'x_floor', dev, 3); // samples 0, 0.8, 1.6
+    const sw = sweepSheet(doc, 'x_floor', dev, 3, undefined, undefined, { range: 'checked' }); // samples 0, 0.8, 1.6
     // Base x = 2 clears every floor swept, so every sample is feasible — including 1.6, where the
     // lo end (x = 1) falls below it. That is a compliance finding and has its own curve.
     expect(sw.feasible).toEqual([true, true, true]);
@@ -4828,7 +4828,7 @@ describe('operating range — the held design asked at each range end, apart fro
   it('a range end with no answer leaves a gap in its curve, never a failure', () => {
     const doc = mk();
     doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // unreachable: the solve cannot land
-    const sw = sweepSheet(doc, 'x_floor', dev, 2);
+    const sw = sweepSheet(doc, 'x_floor', dev, 2, undefined, undefined, { range: 'checked' });
     expect(sw.checks.find((r) => r.id === 'lo@')!.marginPct).toEqual([null, null]);
   });
 

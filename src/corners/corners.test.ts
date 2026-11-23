@@ -2258,13 +2258,18 @@ describe('sweepAtCondition — one condition, sized there or held there', () => 
       4,
       projectingResolver(noDevices, tt),
       REFS,
+      { range: 'checked' },
     );
     const {
       key: at,
       base,
       design,
       ...sweep
-    } = sweepAtCondition(doc, param, device, tt, noDevices, REFS, { base: tt, points: 4 });
+    } = sweepAtCondition(doc, param, device, tt, noDevices, REFS, {
+      base: tt,
+      points: 4,
+      range: 'checked',
+    });
     expect([at, base, design]).toEqual([tt, tt, 'sized']);
     expect(sweep).toEqual(plain);
     expect(plain.verdicts.length).toBe(plain.x.length);
