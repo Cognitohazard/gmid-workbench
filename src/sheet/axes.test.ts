@@ -403,6 +403,18 @@ describe('operating axes — the corners of a claimed box, checked on the held d
     expect(ids.filter((id) => id.includes('@'))).toEqual(['V=lo,S=hi@node-floor']);
   });
 
+  it('every entry of a named end reads the design point, never an earlier entry', () => {
+    const doc = sheet('otas/five-transistor-ota.json');
+    const d: SheetDoc = {
+      ...doc,
+      operatingAxes: undefined,
+      operatingRange: [{ name: 'low', set: { CM_dc: 'CM_lo', CM_hi: 'CM_dc' } }],
+    };
+    const res = runSheet(d, table, undefined, REFS);
+    expect(res.rangeEnds?.[0].set.CM_dc).toBeCloseTo(1.0, 12);
+    expect(res.rangeEnds?.[0].set.CM_hi).toBeCloseTo(1.1, 12); // the design CM_dc, not 1.0
+  });
+
   it('a named end may not contain "="', () => {
     const doc = mk({
       operatingAxes: undefined,

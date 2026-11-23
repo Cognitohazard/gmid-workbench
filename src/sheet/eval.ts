@@ -4472,7 +4472,9 @@ function runRangeEnd(
       }
     }
     over[param] = v;
-    values[param] = v;
+    // Only axes chain: a later axis reads an earlier one's value at this corner. Every entry of a
+    // named end reads the design point, so one entry never sees another's.
+    if (axis) values[param] = v;
   }
   // A hold with no recorded value has nothing to be held at. Unreachable while the base run
   // stands (a hold that does not evaluate fails it), so this is the closed door behind that.
