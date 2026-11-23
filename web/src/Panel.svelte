@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    conditionOf,
     overlayCurvesXY,
     mirrorPinned,
     pinnedPoint,
@@ -233,17 +234,22 @@
     // Tag each table by the parts of (device, corner, temp) that VARY across the drawn
     // set: overlaying four corners of one device tags curves "tt"/"ss"/"ff", not four
     // copies of the same device name.
-    const ids = tablesAll.map((tb) => tb.id);
+    const ids = tablesAll.map((tb) => ({ device: tb.id.device, cond: conditionOf(tb.id) }));
+    const names = [...new Set(ids.flatMap((i) => Object.keys(i.cond)))];
+    const varies = (read: (i: (typeof ids)[number]) => unknown): boolean =>
+      new Set(ids.map(read)).size > 1;
     const vary = {
-      device: new Set(ids.map((i) => i.device)).size > 1,
-      corner: new Set(ids.map((i) => i.corner)).size > 1,
-      temp: new Set(ids.map((i) => i.temp)).size > 1,
+      device: varies((i) => i.device),
+      dims: names.filter((n) => varies((i) => i.cond[n])),
     };
     const tagOf = (i: (typeof ids)[number]): string => {
       const parts: string[] = [];
       if (vary.device) parts.push(i.device);
-      if (vary.corner && i.corner) parts.push(i.corner);
-      if (vary.temp) parts.push(`${i.temp}°C`);
+      for (const n of vary.dims) {
+        const v = i.cond[n];
+        if (v === undefined || v === '') continue;
+        parts.push(n === 'corner' ? String(v) : n === 'temp' ? `${v}°C` : `${n} ${v}`);
+      }
       return parts.length ? parts.join(' ') : i.device;
     };
     const labelOf = (m: OverlayLine): string => {
@@ -253,7 +259,7 @@
           ? `${ov.famName}=${formatSI(m.famValue)}${famUnit}`
           : '';
       if (!overlaid) return fam || dev.id.device;
-      const tag = tagOf(dev.id);
+      const tag = tagOf({ device: dev.id.device, cond: conditionOf(dev.id) });
       return fam ? `${tag} ${fam}` : tag;
     };
 

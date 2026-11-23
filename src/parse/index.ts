@@ -4,18 +4,22 @@
 
 import type {
   Axis,
+  ConditionDimension,
+  ConditionKey,
+  ConditionValue,
   Dataset,
   DeviceTable,
   FilledField,
   ImportError,
   ImportHints,
   ImportResult,
+  QAWarning,
   TableId,
   TableMeta,
 } from '../types';
 import { ALIASES, passthroughKeys } from '../namespace';
 import { makeGrid, strides } from '../grid';
-import { DEFAULT_CORNER, DEFAULT_TEMP_C } from '../constants';
+import { DEFAULT_DIMENSIONS, dimensionName } from '../condition';
 
 // The canonical sweep-axis keys, in their conventional grid order
 // (first axis varies slowest in row-major storage).
@@ -286,6 +290,95 @@ function headerKeys(header: string): string[] {
   return header.split(detectDelimiter(header)).map((c) => canonicalizeHeader(c).key);
 }
 
+/** What a file's headers and the import's hints make of its condition. */
+type ResolvedCondition =
+  | {
+      readonly ok: true;
+      readonly condition: ConditionKey;
+      /** The temperature declared by a header or a hint, if any (TableMeta.temp). */
+      readonly temp: number | undefined;
+      /** The dimensions taken at their fill. */
+      readonly filledIn: readonly string[];
+      /** The dimensions neither declared nor filled, left out of the condition. */
+      readonly left: readonly string[];
+    }
+  | { readonly ok: false; readonly errors: readonly ImportError[] };
+
+/** A header or hint value as a dimension of `kind` reads it, or undefined when it cannot. */
+function asDimensionValue(
+  v: ConditionValue | undefined,
+  kind: ConditionDimension['kind'],
+): ConditionValue | undefined {
+  if (v === undefined) return undefined;
+  if (kind === 'text') return String(v);
+  const n = typeof v === 'number' ? v : Number(String(v).trim());
+  return typeof v === 'string' && v.trim() === '' ? undefined : Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * The table's condition, dimension by dimension: the import's hint, else the file's header, else
+ * the dimension's fill (recorded as filled), else left out (and named, so QA can warn). The
+ * corner and the temperature read their own headers (`# corner:`, `# temp:`); every other
+ * dimension reads a `# name: value` line of the same name, case-insensitive. Without
+ * `hints.dimensions` the dimensions are the corner and the temperature, filled as today.
+ */
+function resolveCondition(meta: ParsedMeta, hints: ImportHints | undefined): ResolvedCondition {
+  const dims = hints?.dimensions ?? DEFAULT_DIMENSIONS;
+  const seen = new Set<string>();
+  for (const d of dims) {
+    const name = dimensionName(d.name);
+    if (name === 'device' || name === '')
+      return {
+        ok: false,
+        errors: [
+          err(
+            'bad-dimension',
+            name === ''
+              ? 'a condition dimension needs a name'
+              : '"device" names the device, not a condition dimension',
+          ),
+        ],
+      };
+    if (seen.has(name))
+      return {
+        ok: false,
+        errors: [err('bad-dimension', `the condition dimension "${name}" is named twice`)],
+      };
+    seen.add(name);
+  }
+  const hinted = (name: string): ConditionValue | undefined => {
+    if (name === 'corner' && hints?.corner !== undefined) return hints.corner;
+    for (const [k, v] of Object.entries(hints?.condition ?? {}))
+      if (dimensionName(k) === name) return v;
+    return undefined;
+  };
+  const header = (name: string): ConditionValue | undefined => {
+    if (name === 'corner') return meta.corner;
+    if (name === 'temp') return meta.temp;
+    for (const [k, v] of Object.entries(meta.extra ?? {})) if (dimensionName(k) === name) return v;
+    return undefined;
+  };
+  // A temperature hint declares the table's temperature whether or not it is a dimension.
+  const hintTemp = asDimensionValue(hinted('temp'), 'number');
+  const temp = typeof hintTemp === 'number' ? hintTemp : meta.temp;
+  const condition: Record<string, ConditionValue> = {};
+  const filledIn: string[] = [];
+  const left: string[] = [];
+  for (const d of dims) {
+    const name = dimensionName(d.name);
+    const declared =
+      asDimensionValue(hinted(name), d.kind) ??
+      (name === 'temp' ? temp : asDimensionValue(header(name), d.kind));
+    const fill = asDimensionValue(d.fill, d.kind);
+    if (declared !== undefined) condition[name] = declared;
+    else if (fill !== undefined) {
+      condition[name] = fill;
+      filledIn.push(name);
+    } else left.push(name);
+  }
+  return { ok: true, condition, temp, filledIn, left };
+}
+
 export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): ImportResult {
   const meta: ParsedMeta = {};
   const decoded = stripBom(toText(text));
@@ -454,20 +547,31 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
   // recorded as such (TableMeta.filled) so every reader can say it was assumed.
   const declaredDevice = hints?.device ?? meta.device;
   const device = declaredDevice ?? deviceFromFilename(hints?.filename) ?? 'dev0';
-  const declaredCorner = hints?.corner ?? meta.corner;
-  const corner = declaredCorner ?? DEFAULT_CORNER;
-  const temp = meta.temp ?? DEFAULT_TEMP_C;
+  const resolved = resolveCondition(meta, hints);
+  if (!resolved.ok) return fail(...resolved.errors);
+  const { condition, temp: declaredTemp, filledIn: conditionFilled, left } = resolved;
   const filledIn: FilledField[] = [];
   if (declaredDevice === undefined) filledIn.push('device');
-  if (declaredCorner === undefined) filledIn.push('corner');
-  if (meta.temp === undefined) filledIn.push('temp');
+  filledIn.push(...conditionFilled);
+  // The engine reads every table at a temperature (tableTempC), whether or not temperature is
+  // one of the condition dimensions; one the file and the import did not declare is assumed.
+  if (declaredTemp === undefined && !filledIn.includes('temp')) filledIn.push('temp');
 
-  const id: TableId = { device, corner, temp };
+  const id: TableId = { device, condition };
+  const warnings: QAWarning[] = left.map((name) => ({
+    rule: 'no-condition-value',
+    severity: 'warning',
+    message:
+      `${hints?.filename ?? `the table of ${device}`} declares no ${name} (# ${name}:) and the ` +
+      `import gives that condition dimension no fill, so the table's condition leaves ${name} ` +
+      `out: it matches only a condition that has no ${name} either`,
+    location: name,
+  }));
 
   const tableMeta: TableMeta = {};
   const mutMeta = tableMeta as { -readonly [K in keyof TableMeta]: TableMeta[K] };
   if (meta.W !== undefined) mutMeta.W = meta.W;
-  if (meta.temp !== undefined) mutMeta.temp = meta.temp;
+  if (declaredTemp !== undefined) mutMeta.temp = declaredTemp;
   if (meta.pdk !== undefined) mutMeta.pdk = meta.pdk;
   if (meta.simulator !== undefined) mutMeta.simulator = meta.simulator;
   if (meta.date !== undefined) mutMeta.date = meta.date;
@@ -490,6 +594,6 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
       ? { id, grid, meta: tableMeta, passthrough: new Set(passthrough) }
       : { id, grid, meta: tableMeta };
 
-  const dataset: Dataset = { tables: [table], warnings: [] };
+  const dataset: Dataset = { tables: [table], warnings };
   return { ok: true, dataset };
 }

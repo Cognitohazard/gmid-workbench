@@ -54,6 +54,6 @@ export function importMostab(input: string | Uint8Array, hints?: ImportHints): I
   );
   if (errors.length) return { ok: false, errors };
 
-  const warnings = tables.flatMap((t) => validate(t));
+  const warnings = [...parsed.dataset.warnings, ...tables.flatMap((t) => validate(t))];
   return { ok: true, dataset: { tables, warnings } };
 }

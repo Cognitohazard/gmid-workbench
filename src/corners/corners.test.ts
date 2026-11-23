@@ -5,6 +5,7 @@
 // the demo model retagged, and every numeric expectation is derived from the model's closed
 // forms — gm/gds = (gm/ID)·VA with VA = VA_PER_L·L — never read back off the engine.
 
+import { conditionOf } from '../condition';
 import { describe, it, expect } from 'vitest';
 import {
   generateDemoDevice,
@@ -125,7 +126,11 @@ const dev = generateDemoDevice({ vds: { min: 0, max: 1, step: 0.5 } });
 
 /** The demo device presented as another condition of the same logical device. */
 function retag(t: DeviceTable, corner: string, temp = 27, meta: TableMeta = {}): DeviceTable {
-  return { ...t, id: { ...t.id, corner, temp }, meta: { ...t.meta, ...meta } };
+  return {
+    ...t,
+    id: { device: t.id.device, condition: { corner, temp } },
+    meta: { ...t.meta, ...meta },
+  };
 }
 
 // --- condition identity --------------------------------------------------------
@@ -254,7 +259,7 @@ describe('device membership', () => {
       table({ device: 'b', corner: 'tt' }),
     ]);
     expect(devices.map((f) => f.device)).toEqual(['b', 'a']);
-    expect(devices[0].conditions.map((t) => t.id.corner)).toEqual(['ss', 'tt']);
+    expect(devices[0].conditions.map((t) => conditionOf(t.id).corner)).toEqual(['ss', 'tt']);
   });
 
   it('reads an identity back into the tuple it was built from', () => {
@@ -292,14 +297,14 @@ describe('nominal designation', () => {
       table({ corner: 'tt', temp: 85 }),
       table({ corner: 'tt', temp: 27 }),
     ]);
-    expect(f.nominal?.id.temp).toBe(27);
+    expect(conditionOf(f.nominal!.id).temp).toBe(27);
     expect(f.nominalSource).toBe('auto');
   });
 
   it('falls to the tt condition nearest 27 °C when none sits there', () => {
     // |85 − 27| = 58 against |125 − 27| = 98.
     const f = soleDevice([table({ corner: 'tt', temp: 125 }), table({ corner: 'tt', temp: 85 })]);
-    expect(f.nominal?.id.temp).toBe(85);
+    expect(conditionOf(f.nominal!.id).temp).toBe(85);
   });
 
   it('designates nothing when two tt conditions are equidistant from 27 °C', () => {
@@ -311,7 +316,7 @@ describe('nominal designation', () => {
 
   it('lets a sole member speak for itself, whatever condition it names', () => {
     const f = soleDevice([table({ corner: 'ss', temp: -40 })]);
-    expect(f.nominal?.id.corner).toBe('ss');
+    expect(conditionOf(f.nominal!.id).corner).toBe('ss');
     expect(f.nominalSource).toBe('auto');
   });
 
@@ -372,7 +377,7 @@ describe('nominal designation', () => {
 describe('projection to one condition', () => {
   it('resolves the unique member at a condition, and nothing at an unclaimed one', () => {
     const f = soleDevice([table({ corner: 'tt' }), table({ corner: 'ss', temp: -40 })]);
-    expect(tableAt(f, key('tt'))?.id.corner).toBe('tt');
+    expect(conditionOf(tableAt(f, key('tt'))!.id).corner).toBe('tt');
     expect(tableAt(f, key('ff'))).toBeUndefined();
   });
 
@@ -391,7 +396,7 @@ describe('projection to one condition', () => {
       table({ corner: 'ss', temp: -40 }),
     ]);
     expect(tableAt(f, key('ss', -40))).toBeUndefined();
-    expect(tableAt(f, key('tt'))?.id.corner).toBe('tt');
+    expect(conditionOf(tableAt(f, key('tt'))!.id).corner).toBe('tt');
   });
 
   it('lists the conditions it holds once each, in load order', () => {
@@ -853,7 +858,25 @@ describe('runCondition', () => {
     // has happened.
     const clear = preflightCondition(gainDoc(20), primary, key('tt', 85), noDevices);
     expect(clear.issues).toEqual([]);
-    expect(clear.primary?.id.temp).toBe(85);
+    expect(conditionOf(clear.primary!.id).temp).toBe(85);
+  });
+
+  it('refuses a condition with a dimension one bound device does not have, naming it', () => {
+    // The primary is characterized at a supply; the child is not, so its table's condition has
+    // no supply and cannot answer for one.
+    const atSupply: CharacterizedDevice = soleDevice([
+      { ...dev, id: { device: dev.id.device, condition: { corner: 'tt', temp: 27, vdd: 1.8 } } },
+    ]);
+    const child = tailDevice(retag(dev, 'tt', 27));
+    const run = preflightCondition(
+      withTail('tail-binding'),
+      atSupply,
+      { corner: 'tt', temp: 27, vdd: 1.8 },
+      () => child,
+    );
+    expect(run.primary).toBeDefined();
+    expect(run.issues.map((i) => i.kind)).toEqual(['absent-condition']);
+    expect(run.issues[0]).toMatchObject({ device: 'nch_tail', missing: 'condition' });
   });
 
   // --- one design across a set of conditions --------------------------------------------
@@ -2408,7 +2431,10 @@ describe('device QA: conditions that carry different columns', () => {
     // The same device at another corner, exported without its gamma and gmb columns: γ is then
     // read back from sth against gm alone, and the γ-model figures drop the body-effect term.
     const bare = withoutColumns(dev, ['gamma', 'gmb']);
-    const lacking: DeviceTable = { ...bare, id: { ...bare.id, corner: 'ss', temp: -40 } };
+    const lacking: DeviceTable = {
+      ...bare,
+      id: { device: bare.id.device, condition: { corner: 'ss', temp: -40 } },
+    };
     const w = validateDeviceConditions(soleDevice([dev, lacking])).find(
       (x) => x.rule === 'device-quantities',
     );

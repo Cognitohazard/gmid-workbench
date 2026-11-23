@@ -6,6 +6,7 @@
 
 import type { Axis, DeviceTable, Grid, Polarity, QAWarning, TableMeta } from '../types';
 import type { CharacterizedDevice } from '../corners';
+import { conditionOf, tableTempC } from '../condition';
 import {
   axisSignature,
   extraScalar,
@@ -319,7 +320,7 @@ export function validate(table: DeviceTable): QAWarning[] {
   if (gm && id) {
     // Scale both 27 °C anchors by this table's temperature (1/U_T ∝ 1/T): rises
     // when colder, falls when hotter, and their ratio is preserved automatically.
-    const tempC = table.meta.temp ?? DEFAULT_TEMP_C;
+    const tempC = tableTempC(table);
     // A temperature the table did not declare is the default, and the finding says so: a cold
     // characterization read at 27 °C can sit past these limits and be valid data.
     const assumed = table.meta.filled?.includes('temp') ?? false;
@@ -850,7 +851,7 @@ function filledFindings(table: DeviceTable): QAWarning[] {
               severity: 'info',
               message:
                 `the table declares no temperature (# temp:), so it is read at ` +
-                `${table.id.temp} °C: ${ASSUMED_TEMP_CONSEQUENCE}`,
+                `${tableTempC(table)} °C: ${ASSUMED_TEMP_CONSEQUENCE}`,
               location: 'temp',
             },
           ];
@@ -860,12 +861,28 @@ function filledFindings(table: DeviceTable): QAWarning[] {
           rule: 'no-corner',
           severity: 'info',
           message:
-            `the table declares no corner (# corner:), so it is taken as "${table.id.corner}": ` +
+            `the table declares no corner (# corner:), so it is taken as "${String(conditionOf(table.id).corner)}": ` +
             `it is grouped and labelled as that condition of its device, every sizing on it says ` +
             `so, and it is the automatic nominal only when no condition of its device is declared`,
           location: 'corner',
         },
       ];
+    if (field !== 'device') {
+      const value = conditionOf(table.id)[field];
+      return value === undefined
+        ? []
+        : [
+            {
+              rule: 'no-condition-value',
+              severity: 'info',
+              message:
+                `the table declares no ${field} (# ${field}:), so it is taken as ${String(value)}, ` +
+                `the fill its import declares for that condition dimension: it is grouped and ` +
+                `labelled as that condition of its device, and every sizing on it says so`,
+              location: field,
+            },
+          ];
+    }
     return [
       {
         rule: 'no-device',

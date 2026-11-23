@@ -77,8 +77,8 @@ describe('the operating point of each device', () => {
   });
 
   it('is kept by the condition where the design is sized, and not where it is held', () => {
-    const tt = { ...table, id: { ...table.id, corner: 'tt', temp: 27 } };
-    const ss = { ...table, id: { ...table.id, corner: 'ss', temp: 27 } };
+    const tt = { ...table, id: { device: table.id.device, condition: { corner: 'tt', temp: 27 } } };
+    const ss = { ...table, id: { device: table.id.device, condition: { corner: 'ss', temp: 27 } } };
     const [device] = groupDevices([tt, ss]);
     const at = { corner: 'tt', temp: 27 };
     const runs = runConditions(

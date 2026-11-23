@@ -3,6 +3,7 @@
 // Pure and deterministic: same options in => same table out. Zero DOM imports.
 
 import type { Axis, DeviceTable } from '../types';
+import { conditionOf } from '../condition';
 import { UT, PHYS, GAMMA_DEFAULT } from '../constants';
 import { makeGrid, strides } from '../grid';
 
@@ -222,7 +223,7 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
   const grid = makeGrid(axes, quantities);
 
   return {
-    id: { device: 'nmos_demo', corner: 'tt', temp: 27 },
+    id: { device: 'nmos_demo', condition: { corner: 'tt', temp: 27 } },
     grid,
     meta: {
       W,
@@ -326,8 +327,7 @@ export function toMostabCsv(table: DeviceTable): string {
   const lines = [
     '# mostab: 0.1',
     `# device: ${id.device}`,
-    `# corner: ${id.corner}`,
-    `# temp: ${id.temp}`,
+    ...Object.entries(conditionOf(id)).map(([name, v]) => `# ${name}: ${v}`),
   ];
   if (meta.W != null) lines.push(`# W: ${meta.W}`);
   if (meta.simulator) lines.push(`# simulator: ${meta.simulator}`);

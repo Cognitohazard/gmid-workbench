@@ -4,6 +4,7 @@
   // It holds no numerics — the core does all evaluation and never throws, in this panel's
   // evaluation worker (sheetEvaluator.svelte.ts), off the page's thread.
   import {
+    conditionOf,
     cloneDoc,
     aggregateConditionRuns,
     projectingResolver,
@@ -350,8 +351,7 @@
   const primary = $derived(bench.primary);
   /** A condition as the panel names it: the primary device's table there says which of its
    *  corner and temperature its file declared, and a filled-in one is marked (conditionLabel). */
-  const condLabel = (key: ConditionKey | { corner: string; temp: number }): string =>
-    conditionLabelIn(primary, key);
+  const condLabel = (key: ConditionKey): string => conditionLabelIn(primary, key);
   /** Every condition the primary device holds, in load order. */
   const conditions = $derived<readonly ConditionKey[]>(primary?.keys ?? []);
   const activeKey = $derived(conditionKeyOf(device.id));
@@ -2438,7 +2438,7 @@
         <div class="snomctl">
           {#each primary.conditions as t (tableUid(t))}
             <button onclick={() => bench.designate(primary.deviceUid, tableUid(t))}
-              >designate {condLabel(t.id)}</button
+              >designate {condLabel(conditionOf(t.id))}</button
             >
           {/each}
         </div>

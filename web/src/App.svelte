@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
   import {
+    conditionOf,
     plottableQuantities,
     importMostab,
     metaScalars,
@@ -825,7 +826,7 @@
     const h = unreadHeader(t.meta, 'temp');
     return h && `its # ${h[0]}: header reads "${h[1]}", which could not be read`;
   };
-  const assumedMark = (t: DeviceTable, field: 'device' | 'corner' | 'temp', why: string): string =>
+  const assumedMark = (t: DeviceTable, field: string, why: string): string =>
     t.meta.filled?.includes(field) ? ` (assumed: ${why})` : '';
 
   /** Designate (or, on the condition that already holds it, un-designate) a device's nominal.
@@ -959,12 +960,17 @@
         <dd>
           {device.id.device}{assumedMark(device, 'device', 'no # device:, named after the file')}
         </dd>
-        <dt>corner</dt>
-        <dd>{device.id.corner}{assumedMark(device, 'corner', 'no # corner:')}</dd>
-        <dt>temp</dt>
-        <dd data-temp>
-          {device.id.temp}°C{assumedMark(device, 'temp', tempUnread(device) ?? 'no # temp:')}
-        </dd>
+        {#each Object.entries(conditionOf(device.id)) as [name, value] (name)}
+          {#if name === 'temp'}
+            <dt>temp</dt>
+            <dd data-temp>
+              {value}°C{assumedMark(device, 'temp', tempUnread(device) ?? 'no # temp:')}
+            </dd>
+          {:else}
+            <dt>{name}</dt>
+            <dd>{value}{assumedMark(device, name, `no # ${name}:`)}</dd>
+          {/if}
+        {/each}
         {#if device.meta.W !== undefined}<dt>char. W</dt>
           <dd>{formatSI(device.meta.W)}m</dd>{/if}
         {#if device.meta.simulator}<dt>simulator</dt>

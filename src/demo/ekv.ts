@@ -275,7 +275,7 @@ export function generateEkvDevice(opts: EkvOptions = {}): DeviceTable {
   ];
   const grid = makeGrid(axes, new Map(names.map((k) => [k, cols[k]])));
   return {
-    id: { device: 'nmos_ekv', corner, temp: tempC },
+    id: { device: 'nmos_ekv', condition: { corner, temp: tempC } },
     grid,
     meta: {
       W,

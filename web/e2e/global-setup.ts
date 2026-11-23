@@ -79,7 +79,7 @@ function cornerCondition(
   scale: Record<string, number>,
 ): DeviceTable {
   const scaled = scaleQuantities(t, scale);
-  return { ...scaled, id: { ...scaled.id, corner, temp } };
+  return { ...scaled, id: { device: scaled.id.device, condition: { corner, temp } } };
 }
 
 function writeFixture(t: DeviceTable, filename: string): void {

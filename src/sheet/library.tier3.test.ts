@@ -1616,7 +1616,7 @@ describe('tier-3 goldens: current-mirror OTA', () => {
     // are on that gate: they follow it instead of being handed K_m times a typed current.
     const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
-      id: { ...t.id, corner, temp },
+      id: { device: t.id.device, condition: { corner, temp } },
     });
     const weak = scaleQuantities(table, { id: 0.5, gm: 0.5 });
     const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);
@@ -1988,7 +1988,7 @@ describe('tier-3 goldens: inverter-based OTA', () => {
     // doubles.
     const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
-      id: { ...t.id, corner, temp },
+      id: { device: t.id.device, condition: { corner, temp } },
     });
     const strong = scaleQuantities(table, { id: 2, gm: 2 });
     const [device] = groupDevices([at(table, 'tt', 27), at(strong, 'ff', 125)]);
