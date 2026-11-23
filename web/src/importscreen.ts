@@ -8,6 +8,7 @@
 // through core's `withCondition`, so the screen and a script give a table the same identity.
 
 import {
+  DEFAULT_DIMENSIONS,
   conditionKeyOf,
   conditionOf,
   dimensionName,
@@ -37,6 +38,27 @@ export interface ImportRow {
 
 const names = (dims: readonly ConditionDimension[]): string[] =>
   dims.map((d) => dimensionName(d.name));
+
+/** The temperature dimension: the importer reads a table that declares none at its fill. */
+export const TEMP_DIMENSION: ConditionDimension = DEFAULT_DIMENSIONS.find(
+  (d) => d.name === 'temp',
+)!;
+
+/**
+ * Why a dimension cannot join a list, or undefined when it can: an empty name, `device`, a name
+ * already in the list, and a `temp` that is not a number are refused. `name` is normalized.
+ */
+export function dimensionRefusal(
+  name: string,
+  kind: ConditionDimension['kind'],
+  dimensions: readonly ConditionDimension[],
+): string | undefined {
+  if (name === '') return 'a dimension needs a name';
+  if (name === 'device') return 'the device is not a condition dimension';
+  if (names(dimensions).includes(name)) return `${name} is already listed`;
+  if (name === 'temp' && kind !== 'number') return 'temp is a temperature in °C, a number';
+  return undefined;
+}
 
 /** A table's row: its condition's value in each bench dimension, as text. */
 export function rowOf(
@@ -81,13 +103,9 @@ export function addDimension(
 ):
   { ok: true; dimensions: ConditionDimension[]; rows: ImportRow[] } | { ok: false; error: string } {
   const name = dimensionName(raw);
-  if (name === '') return { ok: false, error: 'a dimension needs a name' };
-  if (name === 'device') return { ok: false, error: 'the device is not a condition dimension' };
-  if (names(dimensions).includes(name)) return { ok: false, error: `${name} is already listed` };
-  if (name === 'temp' && kind !== 'number')
-    return { ok: false, error: 'temp is a temperature in °C, a number' };
-  const dim: ConditionDimension =
-    name === 'temp' ? { name, kind, unit: '°C', fill: 27 } : { name, kind };
+  const refused = dimensionRefusal(name, kind, dimensions);
+  if (refused) return { ok: false, error: refused };
+  const dim: ConditionDimension = name === 'temp' ? TEMP_DIMENSION : { name, kind };
   return {
     ok: true,
     dimensions: [...dimensions, dim],

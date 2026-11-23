@@ -186,6 +186,47 @@ test('import screen: with temperature removed as a dimension, two temperatures o
   expect(errors).toEqual([]);
 });
 
+test('import screen: a dimension removed while importing leaves the loaded tables too', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await page.goto('/');
+
+  await choose(page, [{ name: 'demo.csv', text: DEMO }]);
+  await confirmImport(page);
+  await storedN(page, 1);
+
+  await choose(page, [
+    { name: 'demo-ss.csv', text: demoWith({ drop: ['corner', 'temp'], add: ['# corner: ss'] }) },
+  ]);
+  await page.getByRole('button', { name: 'remove dimension temp' }).click();
+  await confirmImport(page);
+
+  await expect
+    .poll(async () => (await stored(page)).map((t) => t.condition))
+    .toEqual(expect.arrayContaining([{ corner: 'tt' }, { corner: 'ss' }]));
+  expect(await stored(page)).toHaveLength(2);
+
+  await page.locator('[data-open-conditions]').click();
+  await expect(page.locator('th[data-dim="temp"]')).toHaveCount(0);
+  await expect(page.locator('[data-import-screen="stored"] tbody tr[data-row]')).toHaveCount(2);
+
+  expect(errors).toEqual([]);
+});
+
+test('import screen: cancelling a selection still says what it could not import', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await choose(page, [
+    { name: 'broken.json', text: '{ not json' },
+    { name: 'demo.csv', text: DEMO },
+  ]);
+  await page.locator('[data-import-cancel]').click();
+  await expect(page.locator('[data-import-screen]')).toHaveCount(0);
+  await expect(page.getByText(/broken\.json/)).toBeVisible();
+});
+
 test('import screen: without a temperature dimension or header, 27 °C is assumed and said', async ({
   page,
 }) => {

@@ -2,6 +2,7 @@
   import { tick, untrack } from 'svelte';
   import {
     conditionKeyOf,
+    dimensionName,
     conditionOf,
     sameCondition,
     DEFAULT_DIMENSIONS,
@@ -38,7 +39,13 @@
   import Picker from './Picker.svelte';
   import Help from './Help.svelte';
   import ImportScreen from './ImportScreen.svelte';
-  import { blocksNamingTable, followCornerKeys, rowOf, type ImportRow } from './importscreen';
+  import {
+    applyRows,
+    blocksNamingTable,
+    followCornerKeys,
+    rowOf,
+    type ImportRow,
+  } from './importscreen';
   import { CONTROL_HELP } from './help';
   import {
     loadSettings,
@@ -868,18 +875,21 @@
     changed: readonly DeviceTable[],
   ): (string | undefined)[] {
     const refused: (string | undefined)[] = rows.map(() => undefined);
-    const plan: { idx: number; from: DeviceTable; to: DeviceTable }[] = [];
+    const plan: { idx: number; from: DeviceTable; to: DeviceTable; name: string }[] = [];
     rows.forEach((row, i) => {
+      const to = changed[i];
+      // withCondition always gives a copy; one that says the same as the table changes nothing.
+      const same = (t: DeviceTable): string => JSON.stringify([t.id, t.meta]);
+      if (same(to) === same(row.table)) return;
       const oldUid = tableUid(row.table);
-      if (tableUid(changed[i]) === oldUid) return;
       const idx = tables.findIndex((d) => tableUid(d.table) === oldUid);
       if (idx < 0) refused[i] = 'this table is no longer on the bench';
-      else plan.push({ idx, from: row.table, to: changed[i] });
+      else plan.push({ idx, from: row.table, to, name: row.name });
     });
     const after = tables.map((d) => tableUid(d.table));
     for (const p of plan) after[p.idx] = tableUid(p.to);
     plan.forEach((p) => {
-      if (after.filter((u) => u === after[p.idx]).length > 1)
+      if (tableUid(p.to) !== tableUid(p.from) && after.filter((u) => u === after[p.idx]).length > 1)
         refused[rows.findIndex((r) => r.table === p.from)] =
           `another table on the bench is already ${deviceKey(p.to)}`;
     });
@@ -889,10 +899,17 @@
     const rekey = new Map<string, string>();
     const next = [...tables];
     for (const p of plan) {
-      const entry: Loaded = { ...tables[p.idx], table: p.to, warnings: validate(p.to) };
+      const entry: Loaded = { ...tables[p.idx], table: p.to, warnings: validateFile(p.to, p.name) };
       next[p.idx] = entry;
       const oldUid = tableUid(p.from);
-      rekey.set(oldUid, tableUid(p.to));
+      const newUid = tableUid(p.to);
+      // A table whose identity is unchanged (a dimension added that it leaves out) keeps its
+      // record, rewritten with what it now says.
+      if (newUid === oldUid) {
+        if (entry.stored) void retain(entry, true);
+        continue;
+      }
+      rekey.set(oldUid, newUid);
       // The old record goes only once the new one is written: a refused write leaves the table
       // stored under its old identity rather than not stored at all.
       if (entry.stored) void retain(entry, false).then((ok) => ok && deleteTable(oldUid));
@@ -912,14 +929,50 @@
             const held = next.some((d) => sameCondition(conditionKeyOf(d.table.id), from));
             panel.sheetCornerKeys = followCornerKeys(panel.sheetCornerKeys, from, to, held);
           }
-          for (const path of blocksNamingTable(panel.sheet, tableUid(p.from)))
-            notes.push(
-              `sheet "${name}": block ${path} is bound to the table ${deviceKey(p.from)}, which is now ${deviceKey(p.to)} — bind the block to its device again`,
-            );
+          notes.push(...boundBlocks(`sheet "${name}"`, panel.sheet, p));
         }
       }
+    for (const lib of userSheets())
+      for (const p of plan) notes.push(...boundBlocks(`library sheet "${lib.name}"`, lib.doc, p));
     conditionNotes = notes;
     return refused;
+  }
+
+  /** A sheet's blocks bound to a table whose identity a change replaced, as unresolved notes. */
+  function boundBlocks(
+    where: string,
+    doc: SheetDoc | undefined,
+    p: { from: DeviceTable; to: DeviceTable },
+  ): string[] {
+    if (tableUid(p.from) === tableUid(p.to)) return [];
+    return blocksNamingTable(doc, tableUid(p.from)).map(
+      (path) =>
+        `${where}: block ${path} is bound to the table ${deviceKey(p.from)}, which is now ${deviceKey(p.to)} — bind the block to its device again`,
+    );
+  }
+
+  /**
+   * An import that changed the bench's dimension list gives the tables already loaded the same
+   * list: a dimension taken out leaves their conditions too, and one added is checked against
+   * them, so the screen reopened on the bench shows every value a condition holds.
+   */
+  function reconditionLoaded(
+    before: readonly ConditionDimension[],
+    after: readonly ConditionDimension[],
+    skip: ReadonlySet<string>,
+  ): string[] {
+    const live = after.map((d) => dimensionName(d.name));
+    const removed = before.map((d) => dimensionName(d.name)).filter((n) => !live.includes(n));
+    const rows = tables
+      .filter((d) => !skip.has(tableUid(d.table)))
+      .map((d) => rowOf(deviceKey(d.table), d.table, after));
+    if (!rows.length) return [];
+    const applied = applyRows(rows, after, removed);
+    const errs = applied.rows.flatMap((r) => (r.error ? [`${r.name}: ${r.error}`] : []));
+    if (errs.length) return errs;
+    return applyConditions(applied.rows, applied.tables as DeviceTable[]).flatMap((e, i) =>
+      e ? [`${rows[i].name}: ${e}`] : [],
+    );
   }
 
   // Make device `i` active (overlays cleared). The user's authored panels and tabs are preserved
@@ -1277,12 +1330,21 @@
     onconfirm={(dims, rows, imported) => {
       // Read before the screen closes: `s` follows `screen`.
       const batch = s;
+      const before = dimensions;
       dimensions = dims;
       screen = null;
       commitImport(batch, rows, imported);
+      if (JSON.stringify(before) !== JSON.stringify(dims)) {
+        const errs = reconditionLoaded(before, dims, new Set(imported.map(tableUid)));
+        if (errs.length) importError = [importError, ...errs].filter(Boolean).join(' · ');
+      }
       return rows.map(() => undefined);
     }}
-    oncancel={() => (screen = null)}
+    oncancel={() => {
+      // What the selection could not import is said even when the batch is not.
+      importError = s.errors.length ? s.errors.join(' · ') : null;
+      screen = null;
+    }}
   />
 {:else if screen?.mode === 'stored'}
   <ImportScreen

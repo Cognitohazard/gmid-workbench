@@ -19,6 +19,7 @@ import {
   type DeviceLookup,
 } from '@gmid/mostab-core';
 import { tableUid } from './dashboard';
+import { TEMP_DIMENSION, dimensionRefusal } from './importscreen';
 
 /**
  * What the bench hands a panel: the loaded devices, how to match a binding to one, which
@@ -229,12 +230,11 @@ function parseDimensions(raw: unknown): ConditionDimension[] | undefined {
     const { name, kind, unit, fill } = d as Record<string, unknown>;
     if (typeof name !== 'string' || (kind !== 'text' && kind !== 'number')) return undefined;
     const n = dimensionName(name);
-    if (n === '' || n === 'device' || out.some((x) => dimensionName(x.name) === n))
-      return undefined;
-    if (n === 'temp' && kind !== 'number') return undefined;
-    // The importer reads a table's temperature at 27 °C when it declares none, whatever the list.
+    if (dimensionRefusal(n, kind, out)) return undefined;
+    // The importer reads a table's temperature at its default when it declares none, whatever
+    // the list.
     if (n === 'temp') {
-      out.push({ name: n, kind, unit: '°C', fill: 27 });
+      out.push(TEMP_DIMENSION);
       continue;
     }
     const fillOk =
