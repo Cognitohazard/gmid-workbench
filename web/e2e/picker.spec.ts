@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { test, expect, type Locator } from '@playwright/test';
-import { loadDemo } from './helpers';
+import { loadDemo, confirmImport } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -195,6 +195,7 @@ test('topology picker: a result that rests on an assumption is marked, and its t
     mimeType: 'text/csv',
     buffer: Buffer.from(csv),
   });
+  await confirmImport(page);
   await expect(page.locator('header .device')).toContainText('27°C (assumed)');
 
   await page.locator('header .btn.pick').click();

@@ -1,7 +1,10 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
   import {
+    conditionKeyOf,
     conditionOf,
+    sameCondition,
+    DEFAULT_DIMENSIONS,
     plottableQuantities,
     importMostab,
     metaScalars,
@@ -14,6 +17,7 @@
     formatQuantity,
     formatSI,
     validate,
+    validateFile,
     validateDevices,
     validateDeviceConditions,
     conditionLabel,
@@ -22,6 +26,7 @@
     cloneDoc,
     withParams,
     type CharacterizedDevice,
+    type ConditionDimension,
     type QAWarning,
     type DeviceTable,
     type Grid,
@@ -32,6 +37,8 @@
   import Sizer from './Sizer.svelte';
   import Picker from './Picker.svelte';
   import Help from './Help.svelte';
+  import ImportScreen from './ImportScreen.svelte';
+  import { blocksNamingTable, followCornerKeys, rowOf, type ImportRow } from './importscreen';
   import { CONTROL_HELP } from './help';
   import {
     loadSettings,
@@ -140,6 +147,7 @@
         order: kept.map((d) => tableUid(d.table)),
         active: Math.max(0, kept.indexOf(tables[activeIdx])),
         nominalByFamily,
+        dimensions,
       });
     }
   });
@@ -168,6 +176,9 @@
   // from the registry before the first save effect can run, so a restore never writes an empty
   // set over the stored designations.
   let nominalByFamily = $state<Record<string, string>>({ ...(bootReg?.nominalByFamily ?? {}) });
+  // The bench's condition dimensions: what a table's condition is made of, in order. Set on the
+  // import screen, kept with the registry, and passed to every import and to the grouping.
+  let dimensions = $state<ConditionDimension[]>([...(bootReg?.dimensions ?? DEFAULT_DIMENSIONS)]);
   // Characterized devices: the loaded tables regrouped into logical devices, one entry per
   // (process namespace, device name, declared polarity). Identity is derived from the data
   // headers, never assigned here — the bench displays, warns, and designates a nominal
@@ -183,6 +194,7 @@
       tables.map((d) => d.table),
       nominalByFamily,
       lastDevices,
+      dimensions,
     );
     return lastDevices;
   });
@@ -432,18 +444,18 @@
    * is worth saying; a session-only import of a table that was not stored deletes only to be sure,
    * and a failure there says nothing about a copy.
    */
-  function retain(d: Loaded, hadCopy: boolean): void {
+  function retain(d: Loaded, hadCopy: boolean): Promise<boolean> {
     const { table, stored } = d;
     const uid = tableUid(table);
     const seq = ++retentionSeq;
     lastRetention.set(uid, seq);
     const op = stored ? putTable(uid, plainTable(table), d.importedAt) : deleteTable(uid);
-    void op.then((ok) => {
+    return op.then((ok) => {
       // A record under this key that could not be restored has just been replaced or deleted.
       if (ok) storeSkipped = storeSkipped.filter((s) => s.key !== uid);
-      if (ok || lastRetention.get(uid) !== seq || (!stored && !hadCopy)) return;
+      if (ok || lastRetention.get(uid) !== seq || (!stored && !hadCopy)) return ok;
       const live = tables.find((x) => tableUid(x.table) === uid);
-      if (!live) return;
+      if (!live) return ok;
       live.stored = !stored;
       storeFailed = [
         ...storeFailed,
@@ -451,6 +463,7 @@
           ? `${deviceKey(table)} could not be stored in this browser (storage is unavailable or full) — it is for this session only`
           : `the stored copy of ${deviceKey(table)} could not be deleted — it is still stored`,
       ];
+      return ok;
     });
   }
   /** Switch loaded table `i` between stored and session only, from its chip. */
@@ -458,7 +471,7 @@
     const d = tables[i];
     if (!d || d.stored === stored) return;
     d.stored = stored;
-    retain(d, true);
+    void retain(d, true);
   }
   /** What the browser holds, for the list in the strip: every stored table on the bench, and every
    *  stored record that could not be restored. */
@@ -715,6 +728,7 @@
             return { kind: 'sheet', name: file.name, text: await file.text() };
           const result = importMostab(new Uint8Array(await file.arrayBuffer()), {
             filename: file.name,
+            dimensions,
           });
           return result.ok
             ? { kind: 'tables', name: file.name, tables: result.dataset.tables }
@@ -730,40 +744,73 @@
     );
     if (seq !== importSeq) return; // superseded: the whole batch is discarded, nothing committed
 
-    // ── the commit, in selection order and in one pass.
+    // Sheets go to the library at once; device tables wait on the import screen, where the
+    // designer sees each one's device and condition and can change them before anything joins
+    // the bench.
     const errors: string[] = [];
+    const failed: { name: string; error: string }[] = [];
+    const rows: ImportRow[] = [];
+    for (const s of staged) {
+      if (s.kind === 'failed') {
+        failed.push({ name: s.name, error: s.error });
+        errors.push(`${s.name}: ${s.error}`);
+      } else if (s.kind === 'sheet') {
+        const err = importSheetJSON(s.name, s.text);
+        if (err) errors.push(`${s.name}: ${err}`);
+      } else for (const t of s.tables) rows.push(rowOf(s.name, t, dimensions));
+    }
+    if (!rows.length) {
+      importError = errors.length ? errors.join(' · ') : null;
+      return;
+    }
+    screen = { mode: 'new', rows, failed, errors, stored, importedAt };
+  }
+
+  /** The import screen, open on a batch of new files or on the loaded tables; null when closed.
+   *  Raw state: its rows hold whole tables, which are never edited in place. */
+  type Screen =
+    | {
+        mode: 'new';
+        rows: ImportRow[];
+        failed: { name: string; error: string }[];
+        /** What the selection could not import, said once the batch is committed. */
+        errors: string[];
+        stored: boolean;
+        importedAt: number;
+      }
+    | { mode: 'stored'; rows: ImportRow[] };
+  let screen = $state.raw<Screen | null>(null);
+
+  /** Commit a confirmed batch, in selection order and in one pass. */
+  function commitImport(
+    s: Extract<Screen, { mode: 'new' }>,
+    rows: readonly ImportRow[],
+    imported: readonly DeviceTable[],
+  ): void {
+    const { stored, importedAt } = s;
+    const errors = [...s.errors];
     const incoming: Loaded[] = [];
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, discarded below
     const seen = new Map<string, { file: string; table: DeviceTable }>();
-    for (const s of staged) {
-      if (s.kind === 'failed') {
-        errors.push(`${s.name}: ${s.error}`);
-        continue;
+    rows.forEach((row, i) => {
+      const t = imported[i];
+      // The same table twice in one selection is one table: the first occurrence stands,
+      // so the batch's order (and what "the first import" means below) is deterministic.
+      // Two files can hold one table and differ in what they declare (one states the `tt` the
+      // other leaves to the default): the first still stands, and the line says which was set
+      // aside, since the two are not the same file.
+      const uid = tableUid(t);
+      const first = seen.get(uid);
+      if (first) {
+        if (JSON.stringify(first.table.meta.filled) !== JSON.stringify(t.meta.filled))
+          errors.push(
+            `${row.name}: the same table as ${first.file}, which declares ${first.table.meta.filled?.length ? 'less' : 'more'} of its identity — only ${first.file} is loaded`,
+          );
+        return;
       }
-      if (s.kind === 'sheet') {
-        const err = importSheetJSON(s.name, s.text);
-        if (err) errors.push(`${s.name}: ${err}`);
-        continue;
-      }
-      for (const t of s.tables) {
-        // The same table twice in one selection is one table: the first occurrence stands,
-        // so the batch's order (and what "the first import" means below) is deterministic.
-        // Two files can hold one table and differ in what they declare (one states the `tt` the
-        // other leaves to the default): the first still stands, and the line says which was set
-        // aside, since the two are not the same file.
-        const uid = tableUid(t);
-        const first = seen.get(uid);
-        if (first) {
-          if (JSON.stringify(first.table.meta.filled) !== JSON.stringify(t.meta.filled))
-            errors.push(
-              `${s.name}: the same table as ${first.file}, which declares ${first.table.meta.filled?.length ? 'less' : 'more'} of its identity — only ${first.file} is loaded`,
-            );
-          continue;
-        }
-        seen.set(uid, { file: s.name, table: t });
-        incoming.push({ table: t, warnings: validate(t), stored, importedAt });
-      }
-    }
+      seen.set(uid, { file: row.name, table: t });
+      incoming.push({ table: t, warnings: validateFile(t, row.name), stored, importedAt });
+    });
     // A table already loaded under the same identity is REPLACED IN PLACE (a re-import
     // refreshes it without moving its chip); the rest append in selection order. The re-import
     // takes the retention chosen for this import, like every other table in it.
@@ -793,7 +840,86 @@
     importError = errors.length ? errors.join(' · ') : null;
     // A session-only import is never written; it deletes any stored copy of the same table (an
     // earlier import kept it), so nothing of it is left in the browser after this.
-    for (const d of incoming) retain(d, replacedStored.has(tableUid(d.table)));
+    for (const d of incoming) void retain(d, replacedStored.has(tableUid(d.table)));
+  }
+
+  /** Reopen the import screen on the tables already loaded. */
+  function openConditions(): void {
+    screen = {
+      mode: 'stored',
+      rows: tables.map((d) => rowOf(deviceKey(d.table), d.table, dimensions)),
+    };
+  }
+
+  /** What still names a table whose condition changed and could not follow it, with why. */
+  let conditionNotes = $state<string[]>([]);
+
+  /**
+   * Apply the screen reopened on the loaded tables. A table whose condition changed takes its new
+   * condition in place: its chip stays where it was, its stored copy is replaced by one under the
+   * new identity (the old record is deleted only once the new one is written), the nominal
+   * designation that named it names it still, and a sheet's chosen conditions that named the old
+   * condition follow it — replaced by the new one when no table on the bench still holds the old,
+   * joined by it when one does. Anything else that named the table is listed as unresolved.
+   * Refused, row by row, when the new identity is one another table on the bench already has.
+   */
+  function applyConditions(
+    rows: readonly ImportRow[],
+    changed: readonly DeviceTable[],
+  ): (string | undefined)[] {
+    const refused: (string | undefined)[] = rows.map(() => undefined);
+    const plan: { idx: number; from: DeviceTable; to: DeviceTable }[] = [];
+    rows.forEach((row, i) => {
+      const oldUid = tableUid(row.table);
+      if (tableUid(changed[i]) === oldUid) return;
+      const idx = tables.findIndex((d) => tableUid(d.table) === oldUid);
+      if (idx < 0) refused[i] = 'this table is no longer on the bench';
+      else plan.push({ idx, from: row.table, to: changed[i] });
+    });
+    const after = tables.map((d) => tableUid(d.table));
+    for (const p of plan) after[p.idx] = tableUid(p.to);
+    plan.forEach((p) => {
+      if (after.filter((u) => u === after[p.idx]).length > 1)
+        refused[rows.findIndex((r) => r.table === p.from)] =
+          `another table on the bench is already ${deviceKey(p.to)}`;
+    });
+    if (refused.some((e) => e)) return refused;
+
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive migration scratch, discarded below
+    const rekey = new Map<string, string>();
+    const next = [...tables];
+    for (const p of plan) {
+      const entry: Loaded = { ...tables[p.idx], table: p.to, warnings: validate(p.to) };
+      next[p.idx] = entry;
+      const oldUid = tableUid(p.from);
+      rekey.set(oldUid, tableUid(p.to));
+      // The old record goes only once the new one is written: a refused write leaves the table
+      // stored under its old identity rather than not stored at all.
+      if (entry.stored) void retain(entry, false).then((ok) => ok && deleteTable(oldUid));
+    }
+    tables = next;
+    if (rekey.size) nominalByFamily = migrateNominals(nominalByFamily, rekey);
+
+    const notes: string[] = [];
+    for (const tab of dashboard?.tabs ?? [])
+      for (const panel of tab.panels) {
+        if (panel.render !== 'sheet') continue;
+        const name = `${panel.sheet?.title || 'untitled sheet'}" on tab "${tab.name}`;
+        for (const p of plan) {
+          const from = conditionKeyOf(p.from.id);
+          const to = conditionKeyOf(p.to.id);
+          if (panel.sheetCornerKeys) {
+            const held = next.some((d) => sameCondition(conditionKeyOf(d.table.id), from));
+            panel.sheetCornerKeys = followCornerKeys(panel.sheetCornerKeys, from, to, held);
+          }
+          for (const path of blocksNamingTable(panel.sheet, tableUid(p.from)))
+            notes.push(
+              `sheet "${name}": block ${path} is bound to the table ${deviceKey(p.from)}, which is now ${deviceKey(p.to)} — bind the block to its device again`,
+            );
+        }
+      }
+    conditionNotes = notes;
+    return refused;
   }
 
   // Make device `i` active (overlays cleared). The user's authored panels and tabs are preserved
@@ -882,6 +1008,9 @@
     // The designations go with them: they name tables that no longer exist, and "forget
     // everything" must not leave a choice behind that nothing on screen can show or undo.
     nominalByFamily = {};
+    dimensions = [...DEFAULT_DIMENSIONS];
+    conditionNotes = [];
+    screen = null;
     dashboard = null;
     layoutLost = null;
     sizerOpen = false;
@@ -1131,6 +1260,46 @@
     <button class="btn" onclick={() => (storeFailed = [])}>dismiss</button>
   </div>
 {/if}
+{#if conditionNotes.length}
+  <!-- What named a table by its old identity and could not follow it to its new condition. -->
+  <div class="qa warning" data-condition-notes>
+    unresolved after the condition change — {conditionNotes.join(' · ')}
+    <button class="btn" onclick={() => (conditionNotes = [])}>dismiss</button>
+  </div>
+{/if}
+{#if screen?.mode === 'new'}
+  {@const s = screen}
+  <ImportScreen
+    mode="new"
+    rows={s.rows}
+    {dimensions}
+    failed={s.failed}
+    onconfirm={(dims, rows, imported) => {
+      // Read before the screen closes: `s` follows `screen`.
+      const batch = s;
+      dimensions = dims;
+      screen = null;
+      commitImport(batch, rows, imported);
+      return rows.map(() => undefined);
+    }}
+    oncancel={() => (screen = null)}
+  />
+{:else if screen?.mode === 'stored'}
+  <ImportScreen
+    mode="stored"
+    rows={screen.rows}
+    {dimensions}
+    onconfirm={(dims, rows, changed) => {
+      const refused = applyConditions(rows, changed);
+      if (!refused.some((e) => e)) {
+        dimensions = dims;
+        screen = null;
+      }
+      return refused;
+    }}
+    oncancel={() => (screen = null)}
+  />
+{/if}
 {#if importError}
   <!-- One selection can partly succeed: the files that failed are named here even when the
        rest of the batch loaded, so the line says "not imported", not "the import failed". -->
@@ -1276,6 +1445,12 @@
     {#each benchQA as w}
       <span class="fw {w.severity}" title={w.location ?? ''}>{w.rule}: {w.message}</span>
     {/each}
+    <button
+      class="dcond"
+      onclick={openConditions}
+      data-open-conditions
+      title="see and change the device and condition of every loaded table">conditions…</button
+    >
     <button
       class="dclear"
       onclick={clearAll}
@@ -1858,7 +2033,8 @@
   .dov input:disabled {
     opacity: 0.3;
   }
-  .dclear {
+  .dclear,
+  .dcond {
     cursor: pointer;
     font: inherit;
     font-size: calc(0.72rem * var(--text-scale, 1));
@@ -1870,7 +2046,8 @@
     opacity: 0.6;
     margin-left: 0.4rem;
   }
-  .dclear:hover {
+  .dclear:hover,
+  .dcond:hover {
     opacity: 1;
   }
   /* Where a table lives. Stored is the quiet case; session only is marked on the chip itself

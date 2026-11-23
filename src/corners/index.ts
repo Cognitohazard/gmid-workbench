@@ -55,6 +55,9 @@ export {
   sameCondition,
   sanitizeConditionKey,
   tableTempC,
+  valueIn,
+  withCondition,
+  type WithConditionResult,
 } from '../condition';
 import {
   DEFAULT_DIMENSIONS,

@@ -24,6 +24,19 @@ export const DEFAULT_DIMENSIONS: readonly ConditionDimension[] = [
  *  dimension. */
 export const dimensionName = (name: string): string => name.trim().toLowerCase();
 
+/** A header, hint or typed value as a dimension of `kind` reads it, or undefined when it cannot:
+ *  any value reads as text; a number, or text that is a finite number, reads as a number. Blank
+ *  text is never a number. */
+export function asDimensionValue(
+  v: ConditionValue | undefined,
+  kind: ConditionDimension['kind'],
+): ConditionValue | undefined {
+  if (v === undefined) return undefined;
+  if (kind === 'text') return String(v);
+  const n = typeof v === 'number' ? v : Number(String(v).trim());
+  return typeof v === 'string' && v.trim() === '' ? undefined : Number.isFinite(n) ? n : undefined;
+}
+
 /** A condition's value in one dimension, by name as keys compare it, in its source spelling. */
 export function valueIn(cond: ConditionKey, name: string): ConditionValue | undefined {
   for (const [n, v] of Object.entries(cond)) if (dimensionName(n) === name) return v;
@@ -130,4 +143,96 @@ export function conditionKeyId(k: ConditionKey): string {
  */
 export function tableTempC(table: Pick<DeviceTable, 'meta'>): number {
   return table.meta.temp ?? DEFAULT_TEMP_C;
+}
+
+/** What `withCondition` returns: the table under its new condition, or why the change was
+ *  refused. */
+export type WithConditionResult =
+  | { readonly ok: true; readonly table: DeviceTable }
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * The same table under a changed condition — the one way a table's condition changes after
+ * import. Pure: the table passed in is not touched, and the grid is shared.
+ *
+ * `changes` maps a dimension name to its new value, or to `null` to take the dimension out of
+ * the condition. A value set here is declared: it leaves the record of filled-in identity
+ * (`meta.filled`) and of dimensions left out (`meta.unset`). Setting `temp` also sets the
+ * temperature the engine reads the table at (`meta.temp`). Taking `temp` out of the condition
+ * leaves that temperature as it was — and, when it was assumed, still marked assumed.
+ *
+ * `dimensions` is the bench's list. When given, a value is read as its dimension's kind (text
+ * `1.62` for a number dimension is the number 1.62), and `meta.unset` becomes exactly the
+ * bench dimensions the new condition lacks. Without it, values are taken as given and
+ * `meta.unset` only loses the dimensions now set. `meta.extra` is never touched: a header the
+ * file declared stays on record whatever condition the table is given.
+ *
+ * Refused: the name `device` or an empty name, an empty text value, a number that is not finite,
+ * a value its dimension's kind cannot read, and a `temp` that is not a number.
+ */
+export function withCondition(
+  table: DeviceTable,
+  changes: Readonly<Record<string, ConditionValue | null>>,
+  dimensions?: readonly ConditionDimension[],
+): WithConditionResult {
+  const kindOf = new Map(dimensions?.map((d) => [dimensionName(d.name), d.kind]));
+  const condition: Record<string, ConditionValue> = { ...conditionKeyNames(conditionOf(table.id)) };
+  const set = new Set<string>();
+  const removed = new Set<string>();
+  let temp = table.meta.temp;
+  for (const [raw, v] of Object.entries(changes)) {
+    const name = dimensionName(raw);
+    if (name === '' || name === 'device')
+      return { ok: false, error: `"${raw}" cannot be a dimension of a condition` };
+    if (v === null) {
+      delete condition[name];
+      removed.add(name);
+      continue;
+    }
+    const kind = kindOf.get(name) ?? (name === 'temp' ? 'number' : undefined);
+    const value = kind ? asDimensionValue(v, kind) : v;
+    if (value === undefined || (typeof value === 'string' && value.trim() === ''))
+      return { ok: false, error: `${raw}: "${String(v)}" is not a ${kind ?? 'condition'} value` };
+    if (typeof value === 'number' && !Number.isFinite(value))
+      return { ok: false, error: `${raw}: ${value} is not a finite number` };
+    if (name === 'temp') {
+      if (typeof value !== 'number')
+        return { ok: false, error: `temp: "${value}" is not a number` };
+      temp = value;
+    }
+    condition[name] = typeof value === 'string' ? value.trim() : value;
+    set.add(name);
+  }
+  // A removed temperature that was never declared stays assumed: the engine still reads 27 °C.
+  const filled = (table.meta.filled ?? []).filter(
+    (f) => !set.has(f) && !(removed.has(f) && !(f === 'temp' && temp === undefined)),
+  );
+  const unset = dimensions
+    ? dimensions.map((d) => dimensionName(d.name)).filter((n) => !(n in condition))
+    : (table.meta.unset ?? []).filter((n) => !(n in condition));
+  // Edited in place on a copy, so the fields keep their order: a change that changes nothing
+  // gives a table that serializes exactly as the one passed in.
+  const meta: Record<string, unknown> = { ...table.meta };
+  const put = (key: string, value: unknown, keep: boolean): void => {
+    if (keep) meta[key] = value;
+    else delete meta[key];
+  };
+  put('temp', temp, temp !== undefined);
+  put('filled', filled, filled.length > 0);
+  put('unset', unset, unset.length > 0);
+  return {
+    ok: true,
+    table: {
+      ...table,
+      id: { device: table.id.device, condition },
+      meta: meta as DeviceTable['meta'],
+    },
+  };
+}
+
+/** A condition with each dimension name as keys compare it, values in their source spelling. */
+function conditionKeyNames(cond: ConditionKey): Record<string, ConditionValue> {
+  const out: Record<string, ConditionValue> = {};
+  for (const [n, v] of Object.entries(cond)) out[dimensionName(n)] = v;
+  return out;
 }

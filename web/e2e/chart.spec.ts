@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loadDemo, loadDemoNoVsb, pickQuantity, storedTables } from './helpers';
+import { loadDemo, loadDemoNoVsb, pickQuantity, storedTables, confirmImport } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -131,6 +131,7 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA, seeds the siz
   await loadDemo(page); // app boots empty; load the demo device first
 
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await confirmImport(page);
 
   // Device swapped to the imported table; QA panel surfaces the 200mV vgs step.
   await expect(page.locator('header .device')).toContainText('nch_lvt');
@@ -169,6 +170,7 @@ test('importer: a single-axis table (no L) renders one curve per panel, no error
 }) => {
   await page.goto('/');
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('header .device')).toContainText('nch_singleL');
   // No L axis → the preset family is (none); panels chart a single curve, no per-panel error.
   await expect(page.locator('.grid canvas').first()).toBeVisible();
@@ -198,6 +200,7 @@ test('templates: the menu only offers plots the active device can compute', asyn
   await page.goto('/');
   // Import a sparse table — VGS/ID/GM + W metadata only, no CGG and no GDS columns.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('header .device')).toContainText('nch_singleL');
 
   const offered = () =>
@@ -487,6 +490,7 @@ test('overlay: a second loaded device draws alongside the active one, dashed and
 
   // Import a real device; it ACCUMULATES (the demo stays) and the strip appears with both.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.devices .dev')).toHaveCount(2);
   await expect(page.locator('header .device')).toContainText('nch_lvt'); // the import is active
 
@@ -529,6 +533,7 @@ test('overlay: NMOS vs signed-PMOS compares on shared gm/ID axes (bias mirrored,
   await page.goto('/');
   await loadDemo(page);
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/pmos-demo.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.devices .dev')).toHaveCount(2);
 
   // Make the NMOS demo active (positive bias axes), then overlay the signed PMOS.
@@ -549,6 +554,7 @@ test('overlay: a table read away from the pinned bias says where', async ({ page
   // The primary sweeps no body bias, so the bench has no vsb slider; the overlay does sweep it.
   await loadDemoNoVsb(page);
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-half.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.devices .dev')).toHaveCount(2);
   await page.locator('.devices .dev').first().locator('.dname').click();
   await page.locator('.devices .dev').nth(1).locator('input[type=checkbox]').check();
@@ -827,6 +833,7 @@ test('persistence: loaded devices survive a reload and can be forgotten', async 
   await page.goto('/');
   await loadDemo(page);
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.devices .dev')).toHaveCount(2);
   // Both tables are written to the browser's store before the reload asks for them back.
   await storedTables(page, 2);
@@ -877,6 +884,7 @@ test('dashboard: a family or sweep the active device lacks is kept, drawn withou
   // A device with neither a length nor a drain-voltage sweep: the panel draws one curve and the
   // bench sweeps vgs, each saying so, and neither choice is erased.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('header .device')).toContainText('nch_singleL');
   await expect(page.locator('[data-family-note]')).toHaveCount(1);
   await expect(page.locator('[data-family-note]')).toContainText(

@@ -1,13 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-import { loadDemo, pickSheet, strip } from './helpers';
+import { loadDemo, pickSheet, strip, confirmImport } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 const FIX = 'e2e/fixtures';
 
-/** Load one or more files through the toolbar's file input — one selection, one transaction. */
-const load = (page: Page, ...names: string[]) =>
-  page.locator('.load input[type=file]').setInputFiles(names.map((n) => `${FIX}/${n}`));
+/** Load one or more files through the toolbar's file input — one selection, one transaction —
+ *  and confirm the import screen it opens. */
+async function load(page: Page, ...names: string[]): Promise<void> {
+  await page.locator('.load input[type=file]').setInputFiles(names.map((n) => `${FIX}/${n}`));
+  await confirmImport(page);
+}
 
 /** Two drops dispatched in the SAME task, so the second selection provably supersedes the first
  *  while the first is still reading its files. Driving this through the file input could not
@@ -32,6 +35,7 @@ async function dropTwice(page: Page, first: string[], second: string[]): Promise
     },
     [read(first), read(second)],
   );
+  await confirmImport(page);
 }
 
 /** One condition's chip in the strip. Scoped by device where the bench holds two devices whose
@@ -795,6 +799,7 @@ test('a table with no # temp: header reads as an assumed 27 °C wherever it is s
     mimeType: 'text/csv',
     buffer: Buffer.from(csv),
   });
+  await confirmImport(page);
 
   // The header's identity, its provenance and its noise line say the temperature was assumed,
   // and QA says so at import.
