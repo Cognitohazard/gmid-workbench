@@ -34,6 +34,7 @@ import {
   blockPath,
   idSepProblem,
   AXES_LOCATION,
+  axisEligible,
   axisOrder,
   MAX_BLOCK_DEPTH,
   docExpressions,
@@ -2252,7 +2253,7 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
             location: name,
             about: { kind: 'entry', field: 'set', key: k, problem: 'unknown-name' },
           });
-        } else if (engineSolved(p) || holds(p)) {
+        } else if (!axisEligible(p)) {
           out.push({
             rule: 'sheet-range',
             severity: 'error',
@@ -2323,7 +2324,7 @@ function axisProblems(doc: SheetDoc): QAWarning[] {
     seen.add(param);
     const p = paramByName.get(param);
     if (!p) error(`the operating axis "${param}" moves a name that is not a param of this sheet`);
-    else if (engineSolved(p) || holds(p))
+    else if (!axisEligible(p))
       error(
         engineSolved(p)
           ? `the operating axis "${param}" moves a param the engine solves — the solve would discard it`

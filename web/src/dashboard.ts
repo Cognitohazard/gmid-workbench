@@ -14,6 +14,7 @@ import {
   conditionOf,
   conditionPart,
   type ConditionKey,
+  type CornerSelection,
   sanitizeSheet as loadSheet,
 } from '@gmid/mostab-core';
 
@@ -211,16 +212,7 @@ export interface LegendConfig {
   include: number[]; // sample: family values to always include
 }
 
-/**
- * Which characterization conditions a sheet panel is evaluated at. `nominal` is the device's
- * designated condition (and refuses, rather than substituting one, when nothing designates it);
- * `active` follows the active table's own condition; `chosen` is an explicit set; `all` is every
- * condition the primary device holds.
- */
-export type SheetCornerMode = 'nominal' | 'active' | 'chosen' | 'all';
-const CORNER_MODES: readonly SheetCornerMode[] = ['nominal', 'active', 'chosen', 'all'];
-
-/** Coerce an untrusted persisted list of conditions (a panel's chosen set). Keys are stored
+/** Coerce an untrusted persisted list of conditions (the bench's chosen set). Keys are stored
  *  structured, never as a joined string, and re-canonicalized on the way in so a hand-edited
  *  `TT` still selects the condition `tt` names. */
 export function sanitizeConditionKeys(v: unknown): ConditionKey[] {
@@ -250,14 +242,6 @@ export interface Panel {
   sheet?: SheetDoc; // render === 'sheet': the authored leaf design-sheet, stored verbatim
   sheetSweep?: string; // render === 'sheet': the param the feasibility view sweeps; '' = card only
   sheetSweep2?: string; // render === 'sheet': the second (×) param; with sheetSweep set ⇒ a 2-D map
-  // Which characterization conditions this sheet is evaluated at. Bench state, never written
-  // into `sheet`: the document describes the design, while which corners are loaded and which
-  // of them a panel asks about is a property of this bench. Absent ⇒ 'nominal'.
-  sheetCornerMode?: SheetCornerMode;
-  sheetCornerKeys?: ConditionKey[]; // mode 'chosen': the conditions selected, structured
-  // How a single condition other than the nominal one is asked about: absent ⇒ the design is
-  // sized there; true ⇒ the nominal design is held there. Bench state, like the two above.
-  sheetCornerHold?: boolean;
   // render === 'sheet', restored from storage with a loss: the document exactly as it was stored,
   // and what the restore could not carry into `sheet` (sanitizeSheet's `lost` paths, or the
   // reason nothing could be read). Until the user edits the sheet, the stored copy is what is
@@ -265,6 +249,10 @@ export interface Panel {
   // Absent when the restore lost nothing. Bench state, never written into `sheet`.
   sheetStored?: unknown;
   sheetLost?: string[];
+  // render === 'sheet', on a bench stored before the bench held one corner selection: what this
+  // panel ran then, so the panel can say what it runs now where the two differ, until the user
+  // dismisses it. Bench state, never written into `sheet`.
+  cornersBefore?: CornersBefore;
   auto?: boolean; // an auto-generated canonical panel — regenerated per device on a swap, not
   // user-authored; absent on every panel the user adds, so user work survives a device swap.
 }
@@ -318,6 +306,166 @@ export interface Dashboard {
   tabs: Tab[];
   activeTab: number;
   sweep: string; // bias axis parameterizing every panel's curves (default 'vgs')
+  // Which conditions and which range points every sheet on this bench asks about, and where the
+  // design is sized. Bench state, never written into a sheet: the document describes the design,
+  // while which corners are loaded and which of them count is a property of this bench.
+  corners: CornerSelection;
+}
+
+/** A new bench's selection: the base condition alone, at every range point of the sheet. */
+export const DEFAULT_CORNERS: CornerSelection = {
+  conditions: [],
+  excludeAxes: [],
+  excludeEnds: [],
+};
+
+/** Coerce an untrusted stored list of names (axes or named ends left out); absent is none. */
+function sanitizeNames(v: unknown): string[] | undefined {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) return undefined;
+  return [...new Set(v.filter((x): x is string => typeof x === 'string'))];
+}
+
+/** Coerce an untrusted stored corner selection. A field that cannot be read takes its default
+ *  and is recorded in `lost`. A chosen condition is kept even when nothing loaded answers to it:
+ *  the run reports it as not evaluated, which is the honest state, where pruning it here would
+ *  quietly narrow the question the bench asks. */
+function sanitizeCorners(v: unknown, lost?: string[]): CornerSelection {
+  if (!v || typeof v !== 'object') {
+    lost?.push('corners');
+    return DEFAULT_CORNERS;
+  }
+  const o = v as Record<string, unknown>;
+  const conditions =
+    o.conditions === 'all'
+      ? 'all'
+      : Array.isArray(o.conditions)
+        ? sanitizeConditionKeys(o.conditions)
+        : undefined;
+  if (conditions === undefined) lost?.push('corners.conditions');
+  const excludeAxes = sanitizeNames(o.excludeAxes);
+  if (excludeAxes === undefined) lost?.push('corners.excludeAxes');
+  const excludeEnds = sanitizeNames(o.excludeEnds);
+  if (excludeEnds === undefined) lost?.push('corners.excludeEnds');
+  const base = o.base === undefined ? undefined : sanitizeConditionKey(o.base);
+  if (o.base !== undefined && !base) lost?.push('corners.base');
+  return {
+    conditions: conditions ?? DEFAULT_CORNERS.conditions,
+    excludeAxes: excludeAxes ?? [],
+    excludeEnds: excludeEnds ?? [],
+    ...(base ? { base } : {}),
+  };
+}
+
+/**
+ * What a sheet panel ran before the bench held one selection, read from the panel fields that held
+ * it (`sheetCornerMode`, `sheetCornerKeys`, `sheetCornerHold`): the
+ * nominal alone; every condition; the chosen conditions or the active table's, each with whether
+ * the nominal design was held there; nothing, when it chose no condition; or the active table's
+ * condition where the stored bench does not record which table that was.
+ */
+export type CornersBefore =
+  | { ran: 'nominal' }
+  | { ran: 'all' }
+  | { ran: 'chosen'; keys: ConditionKey[]; hold: boolean }
+  | { ran: 'active'; key: ConditionKey; hold: boolean }
+  | { ran: 'none-chosen' }
+  | { ran: 'active-unrecorded' };
+
+/** What the loader knows about the bench a stored layout is restored onto: the condition of the
+ *  table the stored bench records as active, and the nominal condition of its device and the
+ *  conditions it holds. */
+export interface RestoreContext {
+  active?: ConditionKey;
+  nominal?: ConditionKey;
+  loaded?: readonly ConditionKey[];
+}
+
+function cornersBeforeOf(p: Record<string, unknown>, active?: ConditionKey): CornersBefore {
+  const hold = p.sheetCornerHold === true;
+  switch (p.sheetCornerMode) {
+    case 'all':
+      return { ran: 'all' };
+    case 'chosen': {
+      const keys = sanitizeConditionKeys(p.sheetCornerKeys);
+      return keys.length ? { ran: 'chosen', keys, hold } : { ran: 'none-chosen' };
+    }
+    case 'active':
+      return active ? { ran: 'active', key: active, hold } : { ran: 'active-unrecorded' };
+    default:
+      return { ran: 'nominal' };
+  }
+}
+
+/** A stored CornersBefore, or undefined when it is not one. */
+function sanitizeCornersBefore(v: unknown): CornersBefore | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  switch (o.ran) {
+    case 'nominal':
+    case 'all':
+    case 'none-chosen':
+    case 'active-unrecorded':
+      return { ran: o.ran };
+    case 'chosen': {
+      const keys = sanitizeConditionKeys(o.keys);
+      return keys.length ? { ran: 'chosen', keys, hold: o.hold === true } : undefined;
+    }
+    case 'active': {
+      const key = sanitizeConditionKey(o.key);
+      return key ? { ran: 'active', key, hold: o.hold === true } : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** Where a stored panel sized its design on a device with no nominal: the one condition it ran,
+ *  held or not, since there was no nominal to hold it from. */
+function sizedWithoutNominal(b: CornersBefore): ConditionKey | undefined {
+  if (b.ran === 'chosen' && b.keys.length === 1) return b.keys[0];
+  return b.ran === 'active' ? b.key : undefined;
+}
+
+/**
+ * The one selection for a bench stored before the bench held one, so that no sheet panel checks
+ * less than it did: every condition any panel ran, with the nominal as the base. A panel that ran
+ * every condition makes it every condition. A panel that ran the nominal (its default, a chosen
+ * list left empty, or an active table the stored bench does not record) adds the nominal. Only
+ * when every sheet panel ran one same condition alone, not held, is the design sized there.
+ * On a device with no nominal there is nothing to size at by default, so the base is the
+ * condition where a stored panel sized its design: the first in stored order the device holds
+ * when several did, else the first.
+ */
+function migratedCorners(befores: CornersBefore[], context: RestoreContext): CornerSelection {
+  const { nominal, loaded } = context;
+  const sized = nominal
+    ? []
+    : befores.map(sizedWithoutNominal).filter((k): k is ConditionKey => k !== undefined);
+  const isLoaded = (k: ConditionKey) =>
+    !!loaded?.some((m) => conditionKeyId(m) === conditionKeyId(k));
+  const sizedAt = sized.find(isLoaded) ?? sized[0];
+  const withBase = (c: CornerSelection): CornerSelection => (sizedAt ? { ...c, base: sizedAt } : c);
+  if (befores.some((b) => b.ran === 'all'))
+    return withBase({ ...DEFAULT_CORNERS, conditions: 'all' });
+  const ran = befores.flatMap((b) =>
+    b.ran === 'chosen' ? b.keys : b.ran === 'active' ? [b.key] : nominal ? [nominal] : [],
+  );
+  const keys = sanitizeConditionKeys(ran);
+  if (!keys.length) return DEFAULT_CORNERS;
+  if (!nominal) return withBase({ ...DEFAULT_CORNERS, conditions: keys });
+  const sizedThere =
+    keys.length === 1 &&
+    befores.every(
+      (b) =>
+        (b.ran === 'chosen' && b.keys.length === 1 && !b.hold) || (b.ran === 'active' && !b.hold),
+    );
+  // The nominal alone, sized there, is the default selection.
+  if (keys.length === 1 && conditionKeyId(keys[0]) === conditionKeyId(nominal))
+    return DEFAULT_CORNERS;
+  return sizedThere
+    ? { ...DEFAULT_CORNERS, conditions: keys, base: keys[0] }
+    : { ...DEFAULT_CORNERS, conditions: keys };
 }
 
 const uid = (): string => crypto.randomUUID();
@@ -366,7 +514,7 @@ export function presetTab(dev: DeviceTable): Tab {
 
 /** A fresh dashboard around a device: the canonical tab, swept over VGS. */
 export function presetDashboard(dev: DeviceTable): Dashboard {
-  return { tabs: [presetTab(dev)], activeTab: 0, sweep: SWEEP_AXIS };
+  return { tabs: [presetTab(dev)], activeTab: 0, sweep: SWEEP_AXIS, corners: DEFAULT_CORNERS };
 }
 
 /**
@@ -469,12 +617,16 @@ export function persistedDashboard(d: Dashboard): Dashboard {
  * swap does not erase the choice. Cols clamp to 1..4; ids/render/activeTab are normalized.
  * Expressions are kept verbatim — an unresolvable one surfaces as a per-panel error, never a
  * silent drop of the user's work.
- * Every tab and panel this pass cannot carry, a render it does not know and a corner mode it
- * does not read are recorded in `lost` (a sheet's own losses stay on its panel, see
+ * Every tab and panel this pass cannot carry, a render it does not know and any part of the corner
+ * selection it cannot read are recorded in `lost` (a sheet's own losses stay on its panel, see
  * restoredSheet), so a restore that loses them can keep the stored layout instead of saving
  * over it.
  */
-export function sanitizeDashboard(d: unknown, lost?: string[]): Dashboard | null {
+export function sanitizeDashboard(
+  d: unknown,
+  lost?: string[],
+  context: RestoreContext = {},
+): Dashboard | null {
   if (!d || typeof d !== 'object') return null;
   const o = d as Record<string, unknown>;
   if (!Array.isArray(o.tabs)) {
@@ -483,6 +635,8 @@ export function sanitizeDashboard(d: unknown, lost?: string[]): Dashboard | null
   }
   const str = (v: unknown, fallback: string) => (typeof v === 'string' && v ? v : fallback);
   const tabs: Tab[] = [];
+  const migrating = o.corners === undefined;
+  const befores: CornersBefore[] = [];
   for (const [ti, t] of o.tabs.entries()) {
     if (!t || typeof t !== 'object' || !Array.isArray((t as Record<string, unknown>).panels)) {
       lost?.push(`tabs[${ti}]`);
@@ -505,8 +659,6 @@ export function sanitizeDashboard(d: unknown, lost?: string[]): Dashboard | null
       // a loss, said like one.
       if (pp.render !== undefined && !['chart', 'table', 'sheet'].includes(pp.render as string))
         lost?.push(`${at}.render`);
-      if (pp.sheetCornerMode !== undefined && !CORNER_MODES.some((m) => m === pp.sheetCornerMode))
-        lost?.push(`${at}.sheetCornerMode`);
       const legend = sanitizeLegend(pp.legend);
       const render = pp.render === 'table' ? 'table' : pp.render === 'sheet' ? 'sheet' : 'chart';
       const restored: ReturnType<typeof restoredSheet> =
@@ -516,15 +668,16 @@ export function sanitizeDashboard(d: unknown, lost?: string[]): Dashboard | null
         render === 'sheet' && typeof pp.sheetSweep === 'string' ? pp.sheetSweep : undefined;
       const sheetSweep2 =
         render === 'sheet' && typeof pp.sheetSweep2 === 'string' ? pp.sheetSweep2 : undefined;
-      // Corner state is reconstructed like every other panel field — a field this function does
-      // not name is dropped, so an unlisted addition would vanish on the next reload.
-      const cornerMode = CORNER_MODES.find((m) => m === pp.sheetCornerMode);
-      const sheetCornerMode = render === 'sheet' ? cornerMode : undefined;
-      // A chosen condition is kept even when nothing loaded answers to it: the panel renders it
-      // as its own not-evaluated row, which is the honest state — pruning it here would quietly
-      // narrow the question the panel is asking.
-      const cornerKeys = render === 'sheet' ? sanitizeConditionKeys(pp.sheetCornerKeys) : [];
-      const cornerHold = render === 'sheet' && pp.sheetCornerHold === true;
+      // The old per-panel corner fields are read once into the bench's selection
+      // (migratedCorners) and into what the panel ran then, which it reports beside the selection.
+      let cornersBefore: CornersBefore | undefined;
+      if (render === 'sheet' && migrating) {
+        cornersBefore = cornersBeforeOf(pp, context.active);
+        befores.push(cornersBefore);
+      } else if (render === 'sheet' && pp.cornersBefore !== undefined) {
+        cornersBefore = sanitizeCornersBefore(pp.cornersBefore);
+        if (!cornersBefore) lost?.push(`${at}.cornersBefore`);
+      }
       panels.push({
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,
@@ -540,9 +693,7 @@ export function sanitizeDashboard(d: unknown, lost?: string[]): Dashboard | null
         ...(sheetLost ? { sheetStored, sheetLost } : {}),
         ...(sheetSweep ? { sheetSweep } : {}),
         ...(sheetSweep2 ? { sheetSweep2 } : {}),
-        ...(sheetCornerMode ? { sheetCornerMode } : {}),
-        ...(cornerKeys.length ? { sheetCornerKeys: cornerKeys } : {}),
-        ...(cornerHold ? { sheetCornerHold: true } : {}),
+        ...(cornersBefore ? { cornersBefore } : {}),
         ...(pp.auto === true ? { auto: true } : {}),
       });
     }
@@ -562,5 +713,8 @@ export function sanitizeDashboard(d: unknown, lost?: string[]): Dashboard | null
     activeTab: typeof at === 'number' && at >= 0 && at < tabs.length ? Math.floor(at) : 0,
     // Kept like a family: the bench sweeps vgs where the device lacks it, and says so.
     sweep: typeof o.sweep === 'string' && o.sweep ? o.sweep : SWEEP_AXIS,
+    // A bench stored before the selection existed takes it from its sheet panels; that is a
+    // reading of what was stored, not a loss, beyond the panel fields recorded above.
+    corners: migrating ? migratedCorners(befores, context) : sanitizeCorners(o.corners, lost),
   };
 }

@@ -270,8 +270,8 @@ test('import screen: changing a nominal, chosen condition moves the designation 
   await expect(chip('tt').locator('.dnom')).toHaveText('★ nominal');
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
-  await sp.locator('[data-corner-mode]').selectOption('chosen');
-  await sp.locator('.ckey', { hasText: /^tt$/ }).locator('input').check();
+  await sp.locator('[data-corner-conditions]').selectOption('chosen');
+  await expect(sp.locator('[data-corner-condition="tt"] input')).toBeChecked();
   const before = await storedN(page, 2);
   const oldKey = before.find((t) => t.condition.corner === 'tt')!.key;
 
@@ -288,8 +288,8 @@ test('import screen: changing a nominal, chosen condition moves the designation 
   // is unresolved; the old stored record is gone and the new one is there.
   await expect(chip('tt')).toHaveCount(0);
   await expect(chip('tt_lv').locator('.dnom')).toHaveText('★ nominal');
-  await expect(sp.locator('.ckey', { hasText: 'tt_lv' }).locator('input')).toBeChecked();
-  await expect(sp.locator('.ckey', { hasText: /^tt$/ })).toHaveCount(0);
+  await expect(sp.locator('[data-corner-condition="tt_lv"] input')).toBeChecked();
+  await expect(sp.locator('[data-corner-condition="tt"]')).toHaveCount(0);
   await expect(page.locator('[data-condition-notes]')).toHaveCount(0);
   await expect.poll(async () => (await stored(page)).map((t) => t.key)).not.toContain(oldKey);
   const after = await storedN(page, 2);

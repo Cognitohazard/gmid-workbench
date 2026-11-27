@@ -22,6 +22,10 @@
     rangeEndCheck,
     rangeEndNames,
     rangePoints,
+    axisOrder,
+    axisEligible,
+    selectionRun,
+    selectedRange,
     namingRangeEnds,
     worstPointByCheck,
     RANGE_END_SEP,
@@ -71,6 +75,9 @@
     type SheetResult,
     type ConditionAggregate,
     type ConditionKey,
+    type CornerKey,
+    type CornerSelection,
+    type SheetAxis,
     type ConditionRun,
     type ConditionSweep,
     type CompliancePoint,
@@ -87,8 +94,9 @@
     lineText,
     incompleteText,
   } from '@gmid/mostab-core';
+  import { untrack } from 'svelte';
   import { describeBinding, deviceLabel, type Bench } from './families';
-  import { tableUid, verdictLoss, type SheetCornerMode } from './dashboard';
+  import { tableUid, verdictLoss, type CornersBefore } from './dashboard';
   import { PALETTE, type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
@@ -105,36 +113,24 @@
   import { viridis } from './colormap';
 
   let {
-    device,
     cfg: stored,
     sweep = '',
     sweep2 = '',
-    cornerMode = 'nominal',
-    cornerKeys = [],
-    cornerHold = false,
     restoreLost = undefined,
     unrestored = false,
     restoreStored = undefined,
+    cornersBefore = undefined,
     bench,
     styleVersion = 0,
     onChange,
     onSweep,
     onSweep2,
-    onCornerMode,
-    onCornerKeys,
-    onCornerHold,
+    onDismissCornersBefore = () => {},
   }: {
-    device: DeviceTable;
     cfg: SheetDoc;
     sweep?: string;
     /** The second (×) sweep param: with `sweep` set too, the panel draws a 2-D feasibility map. */
     sweep2?: string;
-    /** Which characterization conditions this panel evaluates at (bench state, never in `cfg`). */
-    cornerMode?: SheetCornerMode;
-    cornerKeys?: ConditionKey[];
-    /** With one condition asked about that is not the nominal one: hold the nominal design there
-     *  instead of sizing the design there (bench state, like the two above). */
-    cornerHold?: boolean;
     /** What restoring this panel's stored document lost (the loader's `lost` paths), when the
      *  restore lost anything. The stored copy is kept until the sheet is edited. */
     restoreLost?: readonly string[];
@@ -144,14 +140,15 @@
     /** The document exactly as it was stored, while a restore loss is recorded: what the panel
      *  exports in place of the restored copy, so an export never writes the loss either. */
     restoreStored?: unknown;
+    /** What this panel ran on a bench stored before the bench held one corner selection, until
+     *  the user dismisses the note that compares it with what the panel runs now. */
+    cornersBefore?: CornersBefore;
     bench: Bench;
     styleVersion?: number;
     onChange: (s: SheetDoc) => void;
     onSweep: (s: string) => void;
     onSweep2: (s: string) => void;
-    onCornerMode: (m: SheetCornerMode) => void;
-    onCornerKeys: (k: ConditionKey[]) => void;
-    onCornerHold: (hold: boolean) => void;
+    onDismissCornersBefore?: () => void;
   } = $props();
 
   // A document in a format this app does not read is kept as it was stored and shown only as the
@@ -343,6 +340,9 @@
   // cards all read the resolved tree, while every edit keeps targeting the raw cfg (so
   // a ref stays a ref in the persisted doc — that is what makes it live).
   const rr = $derived(resolveSheetRefs(cfg, refs));
+  /** The resolved tree with its operating range cut to the bench's corner selection, the sheet
+   *  the sweep and the map read. */
+  const rrCut = $derived(selectedRange(rr.doc, bench.corners));
 
   // ── Conditions. Corners do not add a third question to this panel: it still answers whether
   // the design is FEASIBLE where it is sized and whether that one design COMPLIES everywhere it
@@ -355,37 +355,92 @@
   const condLabel = (key: ConditionKey): string => conditionLabelIn(primary, key);
   /** Every condition the primary device holds, in load order. */
   const conditions = $derived<readonly ConditionKey[]>(primary?.keys ?? []);
-  const activeKey = $derived(conditionKeyOf(device.id));
   const nominalKey = $derived(primary?.nominal ? conditionKeyOf(primary.nominal.id) : undefined);
-  /** The conditions this panel is asking about. A chosen key that is no longer loaded stays in
-   *  the list: it is answered as its own not-evaluated row, where pruning it would silently
-   *  narrow the question. */
-  const keys = $derived.by((): readonly ConditionKey[] => {
-    if (!primary) return [];
-    if (cornerMode === 'active') return [activeKey];
-    if (cornerMode === 'all') return conditions;
-    if (cornerMode === 'chosen') return cornerKeys;
-    return nominalKey ? [nominalKey] : [];
-  });
-  /** Several conditions asked about: one design, sized at the nominal condition, held at the rest. */
+  /** The bench's corner selection: which conditions, operating axes and named range ends every
+   *  panel asks about, and where the design is sized. Bench state, never written into the sheet. */
+  const selection = $derived(bench.corners);
+  /** The corner run the selection asks for (core selectionRun): the sheet with its range cut to
+   *  the selection, the conditions named, and the base the design is sized at. A named condition
+   *  that is no longer loaded stays in the list: it is answered as its own not-evaluated row,
+   *  where pruning it would silently narrow the question. */
+  const asked = $derived(primary ? selectionRun(primary, cfg, selection) : undefined);
+  const keys = $derived<readonly ConditionKey[]>(asked?.keys ?? []);
+  /** Where the design is sized. */
+  const baseKey = $derived(asked?.base);
+  /** The sheet as every evaluation reads it: its operating range cut to the selection. */
+  const cut = $derived(asked?.doc ?? cfg);
+  /** Several conditions asked about: one design, sized at the base, held at the rest. */
   const multi = $derived(keys.length > 1);
   /** The one condition asked about, when there is one. */
   const single = $derived(keys.length === 1 ? keys[0] : undefined);
-  /** One condition asked about that is not the nominal one, while a nominal one exists: it can be
-   *  asked about two ways, and the control beside the mode offers both. */
-  const offNominal = $derived(
-    single !== undefined && nominalKey !== undefined && !sameCondition(single, nominalKey),
+  /** One condition asked about, with the design sized at another and held there — the same
+   *  two-condition question several conditions are, with one of them asked. */
+  const holding = $derived(
+    single !== undefined && baseKey !== undefined && !sameCondition(single, baseKey),
   );
-  /** That condition is asked about with the nominal design held there, not with a design sized
-   *  there — the same two-condition question several conditions are, with one of them asked. */
-  const holding = $derived(cornerHold && offNominal);
-  /** Why nothing can be evaluated, when nothing can be. `nominal` is the one that must never
-   *  fall back to the active table: "the device's nominal" is a designation, and quietly
-   *  substituting whatever is selected would report a verdict about a condition nobody chose. */
-  const blocked = $derived.by((): 'no-device' | 'undesignated' | 'none-chosen' | null => {
+  /** What this panel ran before the bench held one selection, as the conditions it asked about
+   *  and the one it sized at — undefined where that run was nothing, or cannot be told — and what
+   *  it runs now. A stored bench whose runs change says so beside the selection (cornersChange). */
+  const ranBefore = $derived.by(() => {
+    const b = cornersBefore;
+    if (!b || b.ran === 'none-chosen' || b.ran === 'active-unrecorded') return undefined;
+    const ks: readonly ConditionKey[] =
+      b.ran === 'nominal'
+        ? nominalKey
+          ? [nominalKey]
+          : []
+        : b.ran === 'all'
+          ? conditions
+          : b.ran === 'chosen'
+            ? b.keys
+            : [b.key];
+    const hold = (b.ran === 'chosen' || b.ran === 'active') && b.hold;
+    const one = ks.length === 1 ? ks[0] : undefined;
+    const sizedThere = one && !(hold && nominalKey && !sameCondition(one, nominalKey));
+    return { keys: ks, base: sizedThere ? one : nominalKey };
+  });
+  /** Every condition a run evaluates: those asked about, and the one the design is sized at,
+   *  which several conditions, or one held, always run as well. */
+  const runSet = (ks: readonly ConditionKey[], base: ConditionKey | undefined) =>
+    base && !ks.some((k) => sameCondition(k, base)) ? [...ks, base] : ks;
+  const runWords = (ks: readonly ConditionKey[], base: ConditionKey | undefined): string =>
+    `${ks.length ? ks.map(condLabel).join(', ') : 'no condition'}${base ? `, sized at ${condLabel(base)}` : ''}`;
+  const cornersChange = $derived.by((): { before: string; now: string } | undefined => {
+    const b = cornersBefore;
+    if (!b) return undefined;
+    const nowBase = baseKey ?? nominalKey;
+    // Several conditions and nowhere to size the design: nothing is evaluated until one is set.
+    const unsized = keys.length > 1 && nowBase === undefined;
+    const now = unsized
+      ? `nothing: ${keys.map(condLabel).join(', ')} are asked about, but no condition is set as the base the design is sized at — choose one under "sized at" in the corner selection`
+      : runWords(keys, nowBase);
+    // Nothing before and nothing now is no change.
+    if (b.ran === 'none-chosen')
+      return keys.length && !unsized
+        ? { before: 'nothing: no condition was chosen, so the panel did not evaluate', now }
+        : undefined;
+    if (b.ran === 'active-unrecorded')
+      return {
+        before: "the active table's condition, which the stored bench does not record",
+        now,
+      };
+    const was = ranBefore;
+    if (!was) return undefined;
+    const same = (a: readonly ConditionKey[], c: readonly ConditionKey[]) =>
+      a.length === c.length && a.every((k) => c.some((m) => sameCondition(k, m)));
+    const sameBase =
+      was.base === undefined || nowBase === undefined
+        ? was.base === nowBase
+        : sameCondition(was.base, nowBase);
+    if (same(runSet(was.keys, was.base), runSet(keys, nowBase)) && sameBase) return undefined;
+    return { before: runWords(was.keys, was.base), now };
+  });
+  /** Why nothing can be evaluated, when nothing can be. `undesignated` must never fall back to
+   *  the active table: "the device's nominal" is a designation, and quietly substituting whatever
+   *  is selected would report a verdict about a condition nobody chose. */
+  const blocked = $derived.by((): 'no-device' | 'undesignated' | null => {
     if (keys.length) return null;
-    if (!primary) return 'no-device';
-    return cornerMode === 'chosen' ? 'none-chosen' : 'undesignated';
+    return primary ? 'undesignated' : 'no-device';
   });
   // ONE run per condition, through the core's single transition: it preflights the devices,
   // refuses before the engine ever sees a missing or ambiguous table, and only calls a run
@@ -408,11 +463,11 @@
     answered: Answered<'run', number>;
   } | null>(null);
   $effect(() => {
-    const base = multi || holding ? nominalKey : undefined;
+    const base = baseKey;
     ask(
       'run',
       keys.length
-        ? { kind: 'run', doc: cfg, keys: [...keys], ...(base ? { base } : {}), settings: solver }
+        ? { kind: 'run', doc: cut, keys: [...keys], ...(base ? { base } : {}), settings: solver }
         : undefined,
       (r) => {
         runsAnswer = r && { runs: r.result, answered: r.answered };
@@ -658,10 +713,15 @@
    *  design was sized whenever that is not the nominal condition, so a design sized at a corner
    *  never reads as the nominal one; and, while the nominal design is held at one condition,
    *  saying so with the compliance answer there in place of a feasibility it was not asked. */
+  const heldDesign = $derived(
+    baseKey && !(nominalKey && sameCondition(baseKey, nominalKey))
+      ? `design sized at ${condLabel(baseKey)}`
+      : 'nominal design',
+  );
   const feasText = $derived.by((): string => {
     if (holding && single)
       return (
-        `nominal design held at ${condLabel(single)}` +
+        `${heldDesign} held at ${condLabel(single)}` +
         (heldCentre ? `: ${POINT_TEXT[heldCentre.state]}` : '')
       );
     // The word of the sized design's verdict (ConditionAggregate.verdict), never another.
@@ -694,7 +754,7 @@
   });
   /** Whether the sheet claims an operating range at all — read from the doc, so the range
    *  column is there even when no condition could be evaluated. */
-  const hasRange = $derived(rangePoints(rr.doc).length > 0);
+  const hasRange = $derived(rangePoints(rrCut).length > 0);
   /** Compliance is a question only once there is more than one point to ask it at: several
    *  conditions, or a declared operating range. A lone centre is feasibility under another name. */
   const hasCompliance = $derived(agg.compliance.total > 1);
@@ -718,8 +778,20 @@
   // ── Range ends, in words. Every place a range end is shown names it the one way the core puts
   // it (rangeEndNames): the quantity and value its `set` fixes and which end of the claimed range
   // it is, read from the run on screen — never the end's bare name.
-  const endNames = $derived(rangeEndNames(rr.doc, result?.rangeEnds ?? []));
+  const endNames = $derived(rangeEndNames(rrCut, result?.rangeEnds ?? []));
   const endName = (name: string): string => endNames.get(name) ?? name;
+  /** A corner as its chip names it, read from the report's `corner` (never parsed from its key):
+   *  each axis by param and end, with the value that end took. */
+  const cornerText = (corner: CornerKey): string =>
+    corner
+      .map(
+        (k) =>
+          `${k.param} ${k.end === 'lo' ? 'low' : 'high'}` +
+          (k.value !== undefined && Number.isFinite(k.value)
+            ? ` = ${formatQuantity(k.value, cfg.params.find((p) => p.name === k.param)?.unit)}`
+            : ''),
+      )
+      .join(', ');
   /** A point as a reader is told it: its condition, then the range end or the design's own
    *  operating point. */
   const pointName = (key: ConditionKey, rangeEnd: string | undefined): string =>
@@ -836,28 +908,90 @@
       .join(' · ');
   };
 
-  // The conditions the "chosen" mode offers: everything the device holds, plus any stored
-  // choice that is no longer loaded — kept visible and still selectable, because a chosen
-  // condition that vanished is an answer the panel owes ("not evaluated"), not a tidy-up.
-  const chosenOptions = $derived.by(() => {
+  // ── The corner selection control. It edits the bench's one selection (bench.setCorners), so
+  // every panel, the sweep, the map and the sensitivity view read the same corners. A condition
+  // the selection names that is no longer loaded stays listed and selectable: it is answered as
+  // not evaluated, never dropped from the question.
+  const namedList = $derived<readonly ConditionKey[]>(
+    selection.conditions === 'all' ? [] : selection.conditions,
+  );
+  const conditionOptions = $derived.by(() => {
     const out = conditions.map((key) => ({ key, absent: false }));
-    const have = new Set(conditions.map(conditionKeyId));
-    for (const key of cornerKeys)
-      if (!have.has(conditionKeyId(key))) out.push({ key, absent: true });
-    return out.map((o) => ({
-      ...o,
-      on: cornerKeys.some((k) => sameCondition(k, o.key)),
-    }));
+    for (const key of namedList)
+      if (!conditions.some((k) => sameCondition(k, key))) out.push({ key, absent: true });
+    return out.map((o) => ({ ...o, on: namedList.some((k) => sameCondition(k, o.key)) }));
   });
-  const toggleKey = (key: ConditionKey): void =>
-    onCornerKeys(
-      cornerKeys.some((k) => sameCondition(k, key))
-        ? cornerKeys.filter((k) => !sameCondition(k, key))
-        : [...cornerKeys, key],
-    );
-  // The control appears once there is a choice to make, and stays visible whenever a panel is
-  // in a non-default mode — a saved mode the user cannot see is a setting they cannot undo.
-  const showCornerCtl = $derived(conditions.length > 1 || cornerMode !== 'nominal');
+  const setSelection = (patch: Partial<CornerSelection>): void => {
+    const next = { ...selection, ...patch };
+    if ('base' in patch && patch.base === undefined) delete (next as { base?: ConditionKey }).base;
+    bench.setCorners(next);
+  };
+  const conditionMode = $derived(
+    selection.conditions === 'all' ? 'all' : selection.conditions.length ? 'chosen' : 'base',
+  );
+  function setConditionMode(mode: string): void {
+    if (mode === 'all') setSelection({ conditions: 'all' });
+    else if (mode === 'base') setSelection({ conditions: [] });
+    else {
+      // Choosing starts from the condition the design is sized at, or the first held one when no
+      // condition is the nominal, so the list is never empty and the choice holds.
+      const first = baseKey ?? conditions[0];
+      setSelection({ conditions: first ? [first] : [] });
+    }
+  }
+  const toggleCondition = (key: ConditionKey): void =>
+    setSelection({
+      conditions: namedList.some((k) => sameCondition(k, key))
+        ? namedList.filter((k) => !sameCondition(k, key))
+        : [...namedList, key],
+    });
+  /** The operating axes and named range ends this sheet declares. The selection stores the ones
+   *  the designer left out, so an axis added later counts until it is left out in its turn. */
+  const sheetAxes = $derived((rr.doc.operatingAxes ?? []).map((a) => a.param));
+  const sheetEnds = $derived((rr.doc.operatingRange ?? []).map((e) => e.name));
+  const toggleOut = (list: readonly string[], name: string): string[] =>
+    list.includes(name) ? list.filter((n) => n !== name) : [...list, name];
+  /** This sheet's axes and named ends the selection leaves out, said beside the count. */
+  const leftOut = $derived([
+    ...sheetAxes.filter((a) => selection.excludeAxes.includes(a)).map((a) => `${a} ends`),
+    ...sheetEnds.filter((n) => selection.excludeEnds.includes(n)),
+  ]);
+  // ── The operating range editor. It writes operatingAxes, each end kept as the text typed, and
+  // leaves the named ends as they are; the params it offers, the order and the count are the
+  // core's (axisEligible, axisOrder, rangePoints), so the editor cannot disagree with the engine.
+  const axisChoices = $derived(cfg.params.filter(axisEligible).map((p) => p.name));
+  const ownAxes = $derived<readonly SheetAxis[]>(cfg.operatingAxes ?? []);
+  const axisPlan = $derived(axisOrder(cfg));
+  const ownPoints = $derived(rangePoints(cfg).length);
+  function setAxes(axes: readonly SheetAxis[]): void {
+    const next: SheetDoc = { ...cfg, operatingAxes: [...axes] };
+    if (!axes.length) delete next.operatingAxes;
+    onChange(next);
+  }
+  /** Whether the range editor is open: open at first when the sheet declares axes, then the
+   *  designer's to open and close. */
+  let rangeOpen = $state(untrack(() => ownAxes.length > 0));
+  function addAxis(): void {
+    const free = axisChoices.find((n) => !ownAxes.some((a) => a.param === n));
+    if (!free) return;
+    const at = String(cfg.params.find((p) => p.name === free)?.value ?? 0);
+    setAxes([...ownAxes, { param: free, lo: at, hi: at }]);
+  }
+  const editAxis = (i: number, patch: Partial<SheetAxis>): void =>
+    setAxes(ownAxes.map((a, k) => (k === i ? { ...a, ...patch } : a)));
+  const dropAxis = (i: number): void => setAxes(ownAxes.filter((_, k) => k !== i));
+
+  /** How many corners the selection asks about on this sheet (cornersOf, through the run). */
+  const cornerCount = $derived(asked?.corners.length ?? 0);
+  // The control appears once there is a choice to make, and stays visible whenever the selection
+  // is not the default one: a saved selection the user cannot see is a setting they cannot undo.
+  const showCornerCtl = $derived(
+    conditions.length > 1 ||
+      sheetAxes.length > 0 ||
+      sheetEnds.length > 0 ||
+      conditionMode !== 'base' ||
+      selection.base !== undefined,
+  );
 
   // The picker deliberately does NOT preview feasibility. A verdict at a sheet's shipped
   // defaults says nothing about whether that topology can meet YOUR spec — the defaults are
@@ -891,7 +1025,7 @@
   // disables taking a new one there.
   const oneSized = $derived(!multi && !holding);
   const shot = $derived(
-    oneSized && snap && snap.doc === cfg && snap.dev === refTable ? snap : null,
+    oneSized && snap && snap.doc === cut && snap.dev === refTable ? snap : null,
   );
   const sens = $derived(shot?.rows ?? null);
   // A retired snapshot stops RENDERING through `shot` immediately; this drops the reference so it
@@ -925,7 +1059,7 @@
   // A snapshot of a design that has since changed would not be shown, so stop computing it: the
   // worker runs one job at a time, and the verdict for the new design is waiting behind it.
   $effect(() => {
-    if (sensFor && (sensFor.doc !== cfg || sensFor.dev !== refTable)) stopSens();
+    if (sensFor && (sensFor.doc !== cut || sensFor.dev !== refTable)) stopSens();
   });
   function toggleSens(): void {
     if (shot) {
@@ -938,7 +1072,8 @@
     }
     if (!sensReady || !result || !refTable || !refKey || !primary) return;
     const focus = binding ?? rangeEndCheck(result) ?? limitingCheck(result);
-    const doc = cfg;
+    // The cut sheet: a range-end check is ranked only at a corner the selection counts.
+    const doc = cut;
     const dev = refTable;
     sensFor = { doc, dev };
     evaluator.request(
@@ -967,7 +1102,7 @@
     view: PropertySensitivities;
   } | null>(null);
   const propsShot = $derived(
-    oneSized && propsSnap && propsSnap.doc === cfg && propsSnap.dev === refTable ? propsSnap : null,
+    oneSized && propsSnap && propsSnap.doc === cut && propsSnap.dev === refTable ? propsSnap : null,
   );
   $effect(() => {
     if (propsSnap && propsSnap !== propsShot) propsSnap = null;
@@ -979,7 +1114,7 @@
     propsFor = null;
   }
   $effect(() => {
-    if (propsFor && (propsFor.doc !== cfg || propsFor.dev !== refTable)) stopProps();
+    if (propsFor && (propsFor.doc !== cut || propsFor.dev !== refTable)) stopProps();
   });
   function toggleProps(): void {
     if (propsShot) {
@@ -991,7 +1126,7 @@
       return;
     }
     if (!sensReady || !refTable || !refKey || !primary) return;
-    const doc = cfg;
+    const doc = cut;
     const dev = refTable;
     propsFor = { doc, dev };
     evaluator.request(
@@ -1054,9 +1189,9 @@
   // The chart is drawn at ONE condition: the one asked about, or — with several on the page —
   // the one picked beside the sweep control, the condition the design is sized at until another
   // is picked. Where the design is sized at that condition, each sample re-sizes it there with the
-  // knob at its value. Where the panel holds the nominal design at it (several conditions, or the
-  // hold mode of a single one), each sample sizes the design at the nominal condition with the
-  // knob at its value and holds it there, so the curves are that one design's margins at the
+  // knob at its value. Where the panel holds a design at it (sized at the base, another
+  // condition), each sample sizes the design at the base with the knob at its value and holds it
+  // there, so the curves are that one design's margins at the
   // condition — the same question the condition rows answer, asked along the knob. A condition
   // that was not evaluated has no design to sweep and draws nothing; its row says why.
   let sweepPick = $state<string | null>(null);
@@ -1067,10 +1202,15 @@
   });
   /** Where each sample's design is sized, when that is not the chart's own condition. */
   const sweepBase = $derived(
-    sweepKey && nominalKey && (multi || holding) && !sameCondition(sweepKey, nominalKey)
-      ? nominalKey
-      : undefined,
+    sweepKey && baseKey && !sameCondition(sweepKey, baseKey) ? baseKey : undefined,
   );
+  // Whether each sample of the sweep, and each cell of the map, is also asked at every corner of
+  // the operating range the selection counts. Off by default: the range multiplies the work by the
+  // number of its points, and a chart drawn with it off says the range was not checked.
+  let sweepRange = $state(false);
+  let mapRange = $state(false);
+  /** The range points the selection counts on this sheet (rangePoints of the cut sheet). */
+  const rangeCount = $derived(rangePoints(rrCut).length);
   const sweepRun = $derived(sweepKey && runs.find((r) => sameCondition(r.key, sweepKey)));
   /** Whether there is a design to sweep: a run at the chart's condition (refused runs have none),
    *  or — when it is held — one sized at the nominal condition that was evaluated, and held
@@ -1095,11 +1235,12 @@
       active && sweepKey && sweepReady
         ? {
             kind: 'sweep',
-            doc: rr.doc,
+            doc: rrCut,
             param: active,
             at: sweepKey,
             ...(sweepBase ? { base: sweepBase } : {}),
             points: SWEEP_POINTS,
+            range: sweepRange ? 'checked' : 'not-checked',
             settings: solver,
           }
         : undefined,
@@ -1113,6 +1254,7 @@
     const job = sweptAnswer?.answered.job;
     if (!job || !sweepKey || job.param !== active || !sameCondition(job.at, sweepKey)) return null;
     if ((job.base === undefined) !== (sweepBase === undefined)) return null;
+    if (job.range !== (sweepRange ? 'checked' : 'not-checked')) return null;
     return sweptAnswer?.sweep ?? null;
   });
 
@@ -1151,11 +1293,12 @@
       twoD && result !== undefined && refKey
         ? {
             kind: 'sweep2',
-            doc: rr.doc,
+            doc: rrCut,
             param: active,
             param2: active2,
             at: refKey,
             points: SWEEP2_POINTS,
+            range: mapRange ? 'checked' : 'not-checked',
             settings: solver,
             ...(plotted ? { value: plotted } : {}),
           }
@@ -1166,7 +1309,8 @@
   const swept2 = $derived(
     swept2Answer?.answered.job.param === active &&
       swept2Answer.answered.job.param2 === active2 &&
-      (swept2Answer.answered.job.value ?? '') === plotted
+      (swept2Answer.answered.job.value ?? '') === plotted &&
+      swept2Answer.answered.job.range === (mapRange ? 'checked' : 'not-checked')
       ? swept2Answer.map
       : null,
   );
@@ -2202,7 +2346,7 @@
       {:else if multi}
         <span
           class="feasb {feasClass}"
-          title={holding ? CONTROL_HELP.cornerHold : CONTROL_HELP.feasBadge}
+          title={holding ? CONTROL_HELP.cornerBase : CONTROL_HELP.feasBadge}
           data-feasibility
           data-verdict={agg.verdict?.verdict ?? 'not-calculated'}
         >
@@ -2212,16 +2356,14 @@
         {@const v = shownVerdict?.verdict}
         {@const look = lookOf(v)}
         {#if holding && single}
-          <span class="sheldat" data-badge-stamp
-            >the nominal design held at {condLabel(single)}</span
-          >
+          <span class="sheldat" data-badge-stamp>the {heldDesign} held at {condLabel(single)}</span>
         {/if}
         <span
           class="vbadge {look.cls}"
           title={v === 'infeasible' || v === 'no-operating-point'
             ? VERDICT_TITLE[v]
             : holding
-              ? CONTROL_HELP.cornerHold
+              ? CONTROL_HELP.cornerBase
               : CONTROL_HELP.feasBadge}
           data-feasibility
           data-verdict={v ?? 'not-calculated'}
@@ -2253,7 +2395,7 @@
         >
       {/if}
       {#if refKey && !multi}
-        <span class="scond" data-condition={condLabel(refKey)} title={CONTROL_HELP.cornerMode}
+        <span class="scond" data-condition={condLabel(refKey)} title={CONTROL_HELP.cornerSelection}
           >at {condLabel(refKey)}</span
         >
       {/if}
@@ -2330,6 +2472,12 @@
           </select>
         </label>
       {/if}
+      <!-- Each sample also asked at every range point the selection counts: off by default. -->
+      {#if active && !twoD && rangeCount}
+        <label class="swrange" title={CONTROL_HELP.sweepRange}>
+          <input type="checkbox" data-sweep-range bind:checked={sweepRange} />range points ({rangeCount})
+        </label>
+      {/if}
       <!-- With several conditions on the page the chart still draws one: this one. -->
       {#if active && multi && runs.length}
         <label class="swsel" title={CONTROL_HELP.sweepAt}>
@@ -2376,6 +2524,17 @@
           </select>
         </label>
       {/if}
+      <!-- The map's cost is shown before its range switch is on: each cell is one evaluation, and
+         each range point adds one more per cell. -->
+      {#if twoD && rangeCount}
+        <label class="swrange" title={CONTROL_HELP.mapRange}>
+          <input type="checkbox" data-map-range bind:checked={mapRange} />range points ({rangeCount}):
+          <span data-map-count={SWEEP2_POINTS ** 2 * (1 + rangeCount)}
+            >{SWEEP2_POINTS ** 2 * (1 + rangeCount)} evaluations in place of {SWEEP2_POINTS **
+              2}</span
+          >
+        </label>
+      {/if}
       <span class="sexp">
         <button
           title={restoreLost?.length ? CONTROL_HELP.restoreHeld : CONTROL_HELP.copyResults}
@@ -2400,45 +2559,155 @@
       </span>
     </div>
 
-    <!-- Which conditions this panel asks about. Bench state, never written into the document:
-       the sheet describes the design; which corners are loaded is a property of this bench. -->
-    {#if showCornerCtl}
-      <div class="scorners">
-        <span class="glabel" title={CONTROL_HELP.cornerMode}>conditions</span>
-        <select
-          data-corner-mode
-          value={cornerMode}
-          onchange={(e) =>
-            onCornerMode((e.currentTarget as HTMLSelectElement).value as SheetCornerMode)}
+    <!-- The bench's corner selection: which conditions, which operating axes and which named range
+       ends count, and where the design is sized. Bench state, never written into the document —
+       the sheet describes the design; which corners count is a property of this bench, and every
+       panel, sweep, map and sensitivity view on it reads the same one. -->
+    <details
+      class="srange"
+      data-range-editor
+      open={rangeOpen}
+      ontoggle={(e) => (rangeOpen = (e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary title={CONTROL_HELP.rangeEditor}
+        >operating range: <span data-range-count={ownPoints}
+          >{ownPoints} {ownPoints === 1 ? 'point' : 'points'} at each condition</span
+        ></summary
+      >
+      {#each ownAxes as a, i (i)}
+        <div class="saxis" data-range-axis={a.param}>
+          <select
+            data-axis-param
+            value={a.param}
+            onchange={(e) => editAxis(i, { param: (e.currentTarget as HTMLSelectElement).value })}
+          >
+            {#each axisChoices as n (n)}
+              <option value={n} disabled={n !== a.param && ownAxes.some((b) => b.param === n)}
+                >{n}</option
+              >
+            {/each}
+            {#if !axisChoices.includes(a.param)}<option value={a.param}>{a.param}</option>{/if}
+          </select>
+          from
+          <input
+            data-axis-lo
+            value={a.lo}
+            onchange={(e) => editAxis(i, { lo: (e.currentTarget as HTMLInputElement).value })}
+          />
+          to
+          <input
+            data-axis-hi
+            value={a.hi}
+            onchange={(e) => editAxis(i, { hi: (e.currentTarget as HTMLInputElement).value })}
+          />
+          <button data-axis-drop onclick={() => dropAxis(i)} title="remove this axis">×</button>
+        </div>
+      {/each}
+      <div class="saxis">
+        <button
+          data-axis-add
+          disabled={!axisChoices.some((n) => !ownAxes.some((a) => a.param === n))}
+          onclick={addAxis}>add axis</button
         >
-          <option value="nominal">nominal</option>
-          <option value="active">active table</option>
+        {#if axisPlan.cycle}
+          <span class="serr" data-axis-order="refused"
+            >refused: {axisPlan.cycle.join(' → ')} read each other</span
+          >
+        {:else if ownAxes.length > 1}
+          <span data-axis-order={axisPlan.order.map((a) => a.param).join(',')}
+            >valued in order {axisPlan.order.map((a) => a.param).join(' → ')}</span
+          >
+        {/if}
+        {#if cfg.operatingRange?.length}
+          <span data-range-named
+            >named ends: {cfg.operatingRange.map((e) => e.name).join(', ')}</span
+          >
+        {/if}
+      </div>
+    </details>
+
+    {#if showCornerCtl}
+      <div class="scorners" data-corners={cornerCount}>
+        <span class="glabel" title={CONTROL_HELP.cornerSelection}>corners</span>
+        <select
+          data-corner-conditions
+          title={CONTROL_HELP.cornerSelection}
+          value={conditionMode}
+          onchange={(e) => setConditionMode((e.currentTarget as HTMLSelectElement).value)}
+        >
+          <option value="base">base only</option>
           <option value="chosen">chosen</option>
           <option value="all">all ({conditions.length})</option>
         </select>
-        {#if cornerMode === 'chosen'}
-          {#each chosenOptions as c (conditionKeyId(c.key))}
-            <label class="ckey" class:absent={c.absent}>
-              <input type="checkbox" checked={c.on} onchange={() => toggleKey(c.key)} />{condLabel(
-                c.key,
-              )}{#if c.absent}<i>not loaded</i>{/if}
+        {#if conditionMode === 'chosen'}
+          {#each conditionOptions as c (conditionKeyId(c.key))}
+            <label class="ckey" class:absent={c.absent} data-corner-condition={condLabel(c.key)}>
+              <input
+                type="checkbox"
+                checked={c.on}
+                onchange={() => toggleCondition(c.key)}
+              />{condLabel(c.key)}{#if c.absent}<i>not loaded</i>{/if}
             </label>
           {/each}
         {/if}
-        <!-- One condition that is not the nominal one is two questions: a design sized there, or
-           the nominal design held there. Sized where asked is the default. -->
-        {#if offNominal}
+        <label class="ckey" title={CONTROL_HELP.cornerBase}>
+          sized at
           <select
-            data-corner-hold
-            title={CONTROL_HELP.cornerHold}
-            value={holding ? 'hold' : 'size'}
-            onchange={(e) => onCornerHold((e.currentTarget as HTMLSelectElement).value === 'hold')}
+            data-corner-base
+            value={selection.base ? conditionKeyId(selection.base) : ''}
+            onchange={(e) => {
+              const id = (e.currentTarget as HTMLSelectElement).value;
+              setSelection({ base: conditions.find((k) => conditionKeyId(k) === id) });
+            }}
           >
-            <option value="size">sized where asked</option>
-            <option value="hold">hold the nominal design here</option>
+            <option value="">nominal{nominalKey ? ` (${condLabel(nominalKey)})` : ''}</option>
+            {#each conditions as k (conditionKeyId(k))}
+              <option value={conditionKeyId(k)}>{condLabel(k)}</option>
+            {/each}
+            {#if selection.base && !conditions.some((k) => sameCondition(k, selection.base!))}
+              <option value={conditionKeyId(selection.base)}
+                >{condLabel(selection.base)} (not loaded)</option
+              >
+            {/if}
           </select>
+        </label>
+        {#each sheetAxes as a (a)}
+          <label class="ckey" data-corner-axis={a} title={CONTROL_HELP.cornerAxes}>
+            <input
+              type="checkbox"
+              checked={!selection.excludeAxes.includes(a)}
+              onchange={() => setSelection({ excludeAxes: toggleOut(selection.excludeAxes, a) })}
+            />{a} ends
+          </label>
+        {/each}
+        {#each sheetEnds as n (n)}
+          <label class="ckey" data-corner-end={n} title={CONTROL_HELP.cornerEnds}>
+            <input
+              type="checkbox"
+              checked={!selection.excludeEnds.includes(n)}
+              onchange={() => setSelection({ excludeEnds: toggleOut(selection.excludeEnds, n) })}
+            />{n}
+          </label>
+        {/each}
+        <span class="scount" data-corner-count
+          >{cornerCount} {cornerCount === 1 ? 'corner' : 'corners'}</span
+        >
+        {#if leftOut.length}
+          <span class="scount" data-corner-left-out
+            >left out of the corners: {leftOut.join(', ')}</span
+          >
         {/if}
       </div>
+    {/if}
+    {#if cornersChange}
+      <!-- A stored bench from before the bench held one corner selection, whose run for this panel
+           changed when its panels' choices became the one selection: said, never silent. -->
+      <p class="smigrated" data-corner-migrated>
+        This bench was stored when each sheet panel chose its own conditions; its panels now share
+        one selection. Before, this panel ran <span data-corner-before>{cornersChange.before}</span
+        >; now it runs <span data-corner-now>{cornersChange.now}</span>.
+        <button data-corner-migrated-dismiss onclick={onDismissCornersBefore}>dismiss</button>
+      </p>
     {/if}
 
     <!-- Nothing to evaluate. Each of these states says which choice is missing and offers the
@@ -2458,10 +2727,6 @@
             >
           {/each}
         </div>
-      </div>
-    {:else if blocked === 'none-chosen'}
-      <div class="snotev" data-blocked="chosen">
-        <p>no condition is chosen — tick one above, or switch back to nominal.</p>
       </div>
     {:else if blocked === 'no-device'}
       <div class="snotev" data-blocked="device">
@@ -2713,12 +2978,17 @@
               class="sedge"
               title={rangeEndTitle(e, lines)}
               data-range-end={e.name}
+              data-corner={e.corner?.map((k) => `${k.param}=${k.end}`).join(',')}
               data-verdict={v ?? 'not-calculated'}
             >
               <span class="vbadge {look.cls}"
                 >{look.glyph} {VERDICT_WORDS[v ?? 'not-calculated']}</span
               >
-              {endName(e.name)}{#if rangeEndWarns(e).length || e.assumedSource?.length}&nbsp;⚠{/if}
+              {e.corner
+                ? `corner ${cornerText(e.corner)}`
+                : endName(
+                    e.name,
+                  )}{#if rangeEndWarns(e).length || e.assumedSource?.length}&nbsp;⚠{/if}
               {#if v === 'compliant'}<i>{rangeEndSolved(e)}</i>{:else if lines.length}<i
                   >{@render line(lines[0])}</i
                 >{/if}
@@ -2789,6 +3059,12 @@
           to the right, {active2} up).
         </div>
       {/if}
+      {#if rangeCount && swept2.range !== 'checked'}
+        <div class="scap" data-range-not-checked>
+          Each cell is evaluated at its own operating point only: the operating range is not
+          checked.
+        </div>
+      {/if}
       <div class="smap">
         <div class="smy">
           {active2}
@@ -2828,7 +3104,7 @@
     {:else if active && chartData && !twoD && swept}
       {@const at = condLabel(swept.key)}
       <!-- Which of the two curves this is: the design sized at the chart's condition at every
-         sample, or the nominal design held there. -->
+         sample, or the design sized at the base and held there. -->
       {#if curve}
         <div
           class="scap"
@@ -2839,7 +3115,7 @@
           The curve is <b>{curve.name}</b>{#if curve.unit}&nbsp;in {curve.unit}{/if} against
           <b>{active}</b>{#if sweptUnit}&nbsp;in {sweptUnit}{/if} at <b>{at}</b>, {swept.design ===
           'held'
-            ? 'with the nominal design held there'
+            ? `with the ${heldDesign} held there`
             : 'with the design sized at each sample'}. The curve has a gap where it reads a device
           that is read beyond its table, or a value the solve did not find.
         </div>
@@ -2848,16 +3124,22 @@
           margin (%) vs <b>{active}</b>{#if sweptUnit}
             ({sweptUnit}){/if} at <b>{at}</b> —
           {#if swept.design === 'held'}
-            the nominal design held there: each sample sizes the design at {condLabel(swept.base)} with
+            the {heldDesign} held there: each sample sizes the design at {condLabel(swept.base)} with
             {active} at that value and holds it at {at} — widths, lengths, currents and gate biases fixed
-            — so the curves are that design’s margins at {at}{#if rangePoints(cfg).length}, its own
-              range ends included{/if}.
+            — so the curves are that design’s margins at {at}{#if swept.range === 'checked'}, its
+              own range ends included{/if}.
           {:else}
-            sized there: each sample re-sizes the design at {at} with {active} at that value{#if rangePoints(cfg).length}
+            sized there: each sample re-sizes the design at {at} with {active} at that value{#if swept.range === 'checked'}
               · each sample holds its OWN design at the range ends, so the range-end curves move
               with the sweep and never change the sheet's verdict{/if}.
           {/if}
           The 0 line is where a check sits exactly on its limit; dashed = advisory; clipped at ±{MARGIN_CLIP}%.
+        </div>
+      {/if}
+      {#if rangeCount && swept.range !== 'checked'}
+        <div class="scap" data-range-not-checked>
+          The operating range is not checked: each sample is evaluated at its own operating point
+          only.
         </div>
       {/if}
       <div class="pchart" bind:this={el}></div>
@@ -3084,6 +3366,22 @@
     opacity: 0.75;
     font-style: italic;
   }
+  .srange {
+    font-size: calc(0.78rem * var(--text-scale));
+  }
+  .saxis {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.5rem;
+    margin: 0.2rem 0;
+  }
+  .serr {
+    color: var(--err);
+  }
+  .saxis input {
+    width: 7rem;
+  }
   .scorners {
     display: flex;
     flex-wrap: wrap;
@@ -3103,6 +3401,17 @@
   .ckey i {
     font-style: normal;
     opacity: 0.7;
+  }
+  /* What a stored bench ran before its panels shared one selection, and what it runs now. */
+  .smigrated {
+    margin: 0;
+    border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
+    border-radius: 5px;
+    padding: 0.3rem 0.5rem;
+    font-size: calc(0.78rem * var(--text-scale));
+  }
+  .smigrated span {
+    font-family: ui-monospace, monospace;
   }
   /* A condition that was refused, and why. Not a verdict colour: nothing was measured here. */
   .snotev {

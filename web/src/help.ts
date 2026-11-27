@@ -79,8 +79,19 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Draw every condition of this device alongside the active one, so the corner spread shows on every panel at once.',
   nominal:
     'The condition this bench means by “nominal”. Sheets evaluate there by default and the topology picker always searches there. Marked “auto” when the tt-at-27 °C rule picked it and nothing has been chosen — click to pin that choice, so a later import cannot move it; click a pinned one to release it back to the rule.',
-  cornerMode:
-    'Which conditions this sheet is evaluated at. Every run fixes ONE condition and evaluates the whole composition there — the primary device and every named block — because a verdict assembled from a fast input pair and a slow tail describes a chip that does not exist. nominal = the device’s designated condition; active table = whichever table is selected; chosen = the ones you tick; all = every condition loaded for this device. With one condition the design is sized there — or, at a condition other than the nominal one, the nominal design can be held there instead (the control beside this one). With several it is one design: sized at the nominal condition — which joins the set if you left it out — and held at the others.',
+  cornerSelection:
+    'Which corners every sheet on this bench is asked about — one selection, shared by the corner run, the sweep, the map and the sensitivity view, so they never disagree about what a corner is. A corner is a condition, alone or at one point of the sheet’s operating range. Every run fixes ONE condition and evaluates the whole composition there — the primary device and every named block — because a verdict assembled from a fast input pair and a slow tail describes a chip that does not exist. base only = the condition the design is sized at; chosen = the ones you tick (a condition no longer loaded stays listed, and is answered as not evaluated); all = every condition loaded for this device. With several it is one design: sized at the base and held at the others. Untick an operating axis to keep its parameter at its design value at every corner, or a named end to leave it out.',
+  cornerBase:
+    'Where the design is sized — the nominal condition unless you pick another. At every other condition the selection asks about, that same hardware is held — widths, lengths, currents and gate biases fixed, the operating point re-settled — and the panel reports whether it still complies there.',
+  cornerAxes:
+    'An operating axis: the design is asked at both of its ends. Untick it to keep the parameter at its design value at every corner — two of four axes give 4 corners in place of 16.',
+  cornerEnds: 'A named range end of this sheet. Untick it to leave it out of the corners asked.',
+  sweepRange:
+    'Also ask each sample at every range point the corner selection counts. Off by default: it multiplies the sweep by the number of range points. With it off, the chart says the range was not checked.',
+  mapRange:
+    'Also ask each cell at every range point the corner selection counts. The count beside it is the number of evaluations the map then makes. With it off, the map says the range was not checked.',
+  rangeEditor:
+    'The operating range: each axis is a parameter the design must work across, with its low and high end kept as you type them (a number or an expression over the sheet). Every combination of the axis ends is a corner, in the order the axes read each other; a named end sets several parameters at once.',
   cornerDesign:
     'One design, asked about at every condition. “sized here” is the run that chose the widths — the nominal condition, or the only one asked about. “held” is that same hardware at another condition: its widths, lengths, currents and gate biases fixed, only the operating point re-settled. A corner is never allowed to re-size the design, because only one chip gets built.',
   compliance:
@@ -164,9 +175,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'The specification this sheet opens with — supply, load and the targets it is checked against. Each target is a plausible number for a circuit of this class, chosen so the example evaluates; it is not a requirement of the circuit or of any application. Replace every one with your design’s own before reading a verdict as yours.',
   worstAt: `This is where the requirement comes closest to failing, or fails worst, over every point measured. Points without a verdict are not read.`,
   sweepAt:
-    'The condition the chart is drawn at. At the condition the design is sized at, each sample re-sizes the design with the knob at that value. At another condition, each sample sizes the design at the nominal condition with the knob at that value and holds it here — widths, lengths, currents and gate biases fixed — so the curves are that one design’s margins here.',
-  cornerHold:
-    'How a single condition other than the nominal one is asked about. “sized where asked” sizes the design at that condition, as if it were the one being built. “hold the nominal design here” sizes it at the nominal condition and holds that hardware at this one — widths, lengths, currents and gate biases fixed, the operating point re-settled — and reports whether it still complies here.',
+    'The condition the chart is drawn at. At the condition the design is sized at, each sample re-sizes the design with the knob at that value. At another condition, each sample sizes the design at the base condition with the knob at that value and holds it here — widths, lengths, currents and gate biases fixed — so the curves are that one design’s margins here.',
   solverSettings:
     'The tolerances and caps every sheet evaluation and the topology picker run under. Each starts at the value the engine was built and tested with; a changed one is kept in this browser only, marked here and on every sheet panel, and can be reset alone or with the rest. Clearing the bench resets them too.',
   solverNonDefault:

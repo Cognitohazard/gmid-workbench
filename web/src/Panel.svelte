@@ -554,24 +554,19 @@
       <!-- A sheet restored with a loss shows what it lost; one that could not be restored at all
            (no `sheet`) opens refused with the reason, its stored copy kept until a pick replaces it. -->
       <SheetPanel
-        {device}
         cfg={cfg.sheet ?? UNRESTORED_SHEET}
         restoreLost={cfg.sheetLost}
         unrestored={!cfg.sheet}
         restoreStored={cfg.sheetStored}
+        cornersBefore={cfg.cornersBefore}
         sweep={cfg.sheetSweep ?? ''}
         sweep2={cfg.sheetSweep2 ?? ''}
-        cornerMode={cfg.sheetCornerMode ?? 'nominal'}
-        cornerKeys={cfg.sheetCornerKeys ?? []}
-        cornerHold={cfg.sheetCornerHold ?? false}
         {bench}
         {styleVersion}
         onChange={(s) => onChange({ sheet: s })}
         onSweep={(s) => onChange({ sheetSweep: s })}
         onSweep2={(s) => onChange({ sheetSweep2: s })}
-        onCornerMode={(m) => onChange({ sheetCornerMode: m })}
-        onCornerKeys={(k) => onChange({ sheetCornerKeys: k })}
-        onCornerHold={(h) => onChange({ sheetCornerHold: h })}
+        onDismissCornersBefore={() => onChange({ cornersBefore: undefined })}
       />
     {:else}
       <p class="perr">this panel has no sheet</p>

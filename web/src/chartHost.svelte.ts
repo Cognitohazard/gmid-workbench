@@ -36,14 +36,22 @@ export function chartHost(o: ChartHostOpts): void {
     };
   });
 
-  // Create when data first arrives, else refit in place.
+  // Create when data first arrives, else refit in place. A host element that was replaced (its
+  // block re-mounted while a new answer was on its way) gets a fresh chart: the old one is drawn
+  // into a node no longer on the page.
+  let builtEl: HTMLElement | undefined;
   $effect(() => {
     const el = o.el();
     const data = o.data();
     if (!o.active() || !el || !data) return;
+    if (chart && builtEl !== el) {
+      chart.destroy();
+      chart = undefined;
+    }
     if (chart) chart.setData(data);
     else {
       chart = new ChartAdapter(el, data, o.onCursor, o.onAxisToggle, o.onScale);
+      builtEl = el;
       builtStyle = untrack(o.styleVersion); // a fresh build already reflects the current style
     }
   });
