@@ -397,6 +397,90 @@ test('a stored panel that chose no condition runs the nominal, and the note stay
   expect(errors).toEqual([]);
 });
 
+test('a stored panel that chose several conditions, unchanged in what it ran, says nothing', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  const ss = readFileSync(`${FIX}/demo-ss.mostab.csv`, 'utf8');
+  const ff = ss.replace('# corner: ss', '# corner: ff');
+  const files = [
+    {
+      name: 'demo.mostab.csv',
+      mimeType: 'text/csv',
+      buffer: readFileSync(`${FIX}/demo.mostab.csv`),
+    },
+    { name: 'demo-ss.mostab.csv', mimeType: 'text/csv', buffer: Buffer.from(ss) },
+    { name: 'demo-ff.mostab.csv', mimeType: 'text/csv', buffer: Buffer.from(ff) },
+  ];
+  const loadAll = async () => {
+    await page.locator('.load input[type=file]').setInputFiles(files);
+    await confirmImport(page);
+  };
+  await page.goto('/');
+  await loadAll();
+  await condition(page, 'tt').locator('.dname').click();
+  for (let i = 0; i < 2; i++) await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(sheetPanels(page)).toHaveCount(2);
+  await expect(sheetPanels(page).last().locator('[data-corners]')).toBeVisible();
+  // Before, the second panel held ss and ff from the design sized at the nominal, which ran
+  // too; the bench now lists the nominal among its conditions, and nothing runs differently.
+  await storeOldFields(page, [
+    {},
+    {
+      sheetCornerMode: 'chosen',
+      sheetCornerKeys: [
+        { corner: 'ss', temp: -40 },
+        { corner: 'ff', temp: -40 },
+      ],
+    },
+  ]);
+  await page.reload();
+  await loadAll();
+  const sp = sheetPanels(page).last();
+  await expect(sp.locator('.scorntab tr')).toHaveCount(3);
+  await expect(sp.locator('[data-corner-migrated]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('on a device with no nominal, a stored bench is sized where a stored panel sized it', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  // Two tables and no typical one: nothing designates a nominal.
+  const ss = readFileSync(`${FIX}/demo-ss.mostab.csv`, 'utf8');
+  const ff = ss.replace('# corner: ss', '# corner: ff');
+  const loadBoth = async () => {
+    await page.locator('.load input[type=file]').setInputFiles([
+      { name: 'demo-ss.mostab.csv', mimeType: 'text/csv', buffer: Buffer.from(ss) },
+      { name: 'demo-ff.mostab.csv', mimeType: 'text/csv', buffer: Buffer.from(ff) },
+    ]);
+    await confirmImport(page);
+  };
+  await page.goto('/');
+  await loadBoth();
+  await page.locator('.devices .fam .dev .dname').first().click();
+  for (let i = 0; i < 2; i++) await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(sheetPanels(page)).toHaveCount(2);
+  await expect(sheetPanels(page).last().locator('[data-corners]')).toBeVisible();
+  await storeOldFields(page, [
+    { sheetCornerMode: 'all' },
+    { sheetCornerMode: 'chosen', sheetCornerKeys: [{ corner: 'ff', temp: -40 }] },
+  ]);
+  await page.reload();
+  await loadBoth();
+  const [first, second] = [sheetPanels(page).first(), sheetPanels(page).last()];
+  // Every condition, sized at ff where the second panel sized it, and every one evaluated.
+  await expect(first.locator('[data-corner-conditions]')).toHaveValue('all');
+  for (const sp of [first, second]) {
+    await expect(sp.locator('.scorntab tr')).toHaveCount(2);
+    await expect(sp.locator('.scorntab tr.st-skip')).toHaveCount(0);
+    await expect(sp.locator('[data-corner-migrated] [data-corner-now]')).toContainText(
+      'sized at ff@-40',
+    );
+  }
+  expect(errors).toEqual([]);
+});
+
 test('choosing conditions on a bench with no nominal starts from a held condition and stays chosen', async ({
   page,
 }) => {

@@ -373,10 +373,12 @@ export type CornersBefore =
   | { ran: 'active-unrecorded' };
 
 /** What the loader knows about the bench a stored layout is restored onto: the condition of the
- *  table the stored bench records as active, and the nominal condition of its device. */
+ *  table the stored bench records as active, and the nominal condition of its device and the
+ *  conditions it holds. */
 export interface RestoreContext {
   active?: ConditionKey;
   nominal?: ConditionKey;
+  loaded?: readonly ConditionKey[];
 }
 
 function cornersBeforeOf(p: Record<string, unknown>, active?: ConditionKey): CornersBefore {
@@ -418,29 +420,49 @@ function sanitizeCornersBefore(v: unknown): CornersBefore | undefined {
   }
 }
 
+/** Where a stored panel sized its design on a device with no nominal: the one condition it ran,
+ *  held or not, since there was no nominal to hold it from. */
+function sizedWithoutNominal(b: CornersBefore): ConditionKey | undefined {
+  if (b.ran === 'chosen' && b.keys.length === 1) return b.keys[0];
+  return b.ran === 'active' ? b.key : undefined;
+}
+
 /**
  * The one selection for a bench stored before the bench held one, so that no sheet panel checks
  * less than it did: every condition any panel ran, with the nominal as the base. A panel that ran
  * every condition makes it every condition. A panel that ran the nominal (its default, a chosen
  * list left empty, or an active table the stored bench does not record) adds the nominal. Only
  * when every sheet panel ran one same condition alone, not held, is the design sized there.
+ * On a device with no nominal there is nothing to size at by default, so the base is the
+ * condition where a stored panel sized its design: the first in stored order the device holds
+ * when several did, else the first.
  */
-function migratedCorners(befores: CornersBefore[], nominal?: ConditionKey): CornerSelection {
-  if (befores.some((b) => b.ran === 'all')) return { ...DEFAULT_CORNERS, conditions: 'all' };
+function migratedCorners(befores: CornersBefore[], context: RestoreContext): CornerSelection {
+  const { nominal, loaded } = context;
+  const sized = nominal
+    ? []
+    : befores.map(sizedWithoutNominal).filter((k): k is ConditionKey => k !== undefined);
+  const isLoaded = (k: ConditionKey) =>
+    !!loaded?.some((m) => conditionKeyId(m) === conditionKeyId(k));
+  const sizedAt = sized.find(isLoaded) ?? sized[0];
+  const withBase = (c: CornerSelection): CornerSelection => (sizedAt ? { ...c, base: sizedAt } : c);
+  if (befores.some((b) => b.ran === 'all'))
+    return withBase({ ...DEFAULT_CORNERS, conditions: 'all' });
   const ran = befores.flatMap((b) =>
     b.ran === 'chosen' ? b.keys : b.ran === 'active' ? [b.key] : nominal ? [nominal] : [],
   );
   const keys = sanitizeConditionKeys(ran);
   if (!keys.length) return DEFAULT_CORNERS;
+  if (!nominal) return withBase({ ...DEFAULT_CORNERS, conditions: keys });
   const sizedThere =
     keys.length === 1 &&
     befores.every(
       (b) =>
         (b.ran === 'chosen' && b.keys.length === 1 && !b.hold) || (b.ran === 'active' && !b.hold),
     );
-  const isNominal = (k: ConditionKey) => !!nominal && conditionKeyId(k) === conditionKeyId(nominal);
   // The nominal alone, sized there, is the default selection.
-  if (keys.length === 1 && isNominal(keys[0])) return DEFAULT_CORNERS;
+  if (keys.length === 1 && conditionKeyId(keys[0]) === conditionKeyId(nominal))
+    return DEFAULT_CORNERS;
   return sizedThere
     ? { ...DEFAULT_CORNERS, conditions: keys, base: keys[0] }
     : { ...DEFAULT_CORNERS, conditions: keys };
@@ -693,8 +715,6 @@ export function sanitizeDashboard(
     sweep: typeof o.sweep === 'string' && o.sweep ? o.sweep : SWEEP_AXIS,
     // A bench stored before the selection existed takes it from its sheet panels; that is a
     // reading of what was stored, not a loss, beyond the panel fields recorded above.
-    corners: migrating
-      ? migratedCorners(befores, context.nominal)
-      : sanitizeCorners(o.corners, lost),
+    corners: migrating ? migratedCorners(befores, context) : sanitizeCorners(o.corners, lost),
   };
 }

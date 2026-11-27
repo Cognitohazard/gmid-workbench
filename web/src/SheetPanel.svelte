@@ -399,6 +399,10 @@
     const sizedThere = one && !(hold && nominalKey && !sameCondition(one, nominalKey));
     return { keys: ks, base: sizedThere ? one : nominalKey };
   });
+  /** Every condition a run evaluates: those asked about, and the one the design is sized at,
+   *  which several conditions, or one held, always run as well. */
+  const runSet = (ks: readonly ConditionKey[], base: ConditionKey | undefined) =>
+    base && !ks.some((k) => sameCondition(k, base)) ? [...ks, base] : ks;
   const runWords = (ks: readonly ConditionKey[], base: ConditionKey | undefined): string =>
     `${ks.length ? ks.map(condLabel).join(', ') : 'no condition'}${base ? `, sized at ${condLabel(base)}` : ''}`;
   const cornersChange = $derived.by((): { before: string; now: string } | undefined => {
@@ -421,7 +425,7 @@
       was.base === undefined || nowBase === undefined
         ? was.base === nowBase
         : sameCondition(was.base, nowBase);
-    if (same(was.keys, keys) && sameBase) return undefined;
+    if (same(runSet(was.keys, was.base), runSet(keys, nowBase)) && sameBase) return undefined;
     return { before: runWords(was.keys, was.base), now };
   });
   /** Why nothing can be evaluated, when nothing can be. `undesignated` must never fall back to

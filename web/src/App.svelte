@@ -376,14 +376,16 @@
   let layoutLost = $state<{ lost: string[]; held: boolean } | null>(null);
   /** What a stored layout from before the bench held one corner selection is read against: the
    *  condition of the table the stored registry records as active, when that table is loaded, and
-   *  the nominal condition of the device being opened. */
+   *  the nominal condition of the device being opened and the conditions it holds. */
   const restoreContext = (dev: DeviceTable): RestoreContext => {
     const activeUid = bootReg?.order[bootReg.active];
     const active = tables.find((t) => tableUid(t.table) === activeUid)?.table;
-    const nominal = deviceOf(tableUid(dev))?.nominal;
+    const device = deviceOf(tableUid(dev));
+    const nominal = device?.nominal;
     return {
       ...(active ? { active: conditionKeyOf(active.id) } : {}),
       ...(nominal ? { nominal: conditionKeyOf(nominal.id) } : {}),
+      ...(device ? { loaded: device.keys } : {}),
     };
   };
   const loadDashboard = (dev: DeviceTable): Dashboard => {
