@@ -481,6 +481,65 @@ test('on a device with no nominal, a stored bench is sized where a stored panel 
   expect(errors).toEqual([]);
 });
 
+/** A bench at ss and ff, with no typical table, so nothing designates a nominal; `n` sheet
+ *  panels added. Returns the reload that restores it from storage. */
+async function benchWithoutNominal(page: Page, n: number) {
+  const ss = readFileSync(`${FIX}/demo-ss.mostab.csv`, 'utf8');
+  const ff = ss.replace('# corner: ss', '# corner: ff');
+  const loadBoth = async () => {
+    await page.locator('.load input[type=file]').setInputFiles([
+      { name: 'demo-ss.mostab.csv', mimeType: 'text/csv', buffer: Buffer.from(ss) },
+      { name: 'demo-ff.mostab.csv', mimeType: 'text/csv', buffer: Buffer.from(ff) },
+    ]);
+    await confirmImport(page);
+  };
+  await page.goto('/');
+  await loadBoth();
+  await page.locator('.devices .fam .dev .dname').first().click();
+  for (let i = 0; i < n; i++) await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(sheetPanels(page)).toHaveCount(n);
+  await expect(sheetPanels(page).last().locator('[data-corners]')).toBeVisible();
+  return async () => {
+    await page.reload();
+    await loadBoth();
+  };
+}
+
+test('on a device with no nominal, a stored bench with nowhere to size the design says to choose a base', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  const reload = await benchWithoutNominal(page, 2);
+  // The second panel followed the active table, which the stored bench does not record.
+  await storeOldFields(page, [{ sheetCornerMode: 'all' }, { sheetCornerMode: 'active' }]);
+  await page.evaluate(() => localStorage.removeItem('gmid.devreg'));
+  await reload();
+  const [first, second] = [sheetPanels(page).first(), sheetPanels(page).last()];
+  for (const sp of [first, second]) {
+    await expect(sp.locator('[data-corner-conditions]')).toHaveValue('all');
+    await expect(sp.locator('[data-corner-base]')).toHaveValue('');
+  }
+  // The panel that ran every condition ran nothing then either: no nominal to size at.
+  await expect(first.locator('[data-corner-migrated]')).toHaveCount(0);
+  const now = second.locator('[data-corner-migrated] [data-corner-now]');
+  await expect(now).toContainText('no condition is set as the base');
+  await expect(now).toContainText('choose one under "sized at" in the corner selection');
+  expect(errors).toEqual([]);
+});
+
+test('a stored panel that chose no condition, on a device with no nominal, ran nothing then and now and says nothing', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  const reload = await benchWithoutNominal(page, 1);
+  await storeOldFields(page, [{ sheetCornerMode: 'chosen', sheetCornerKeys: [] }]);
+  await reload();
+  const sp = sheetPanels(page).last();
+  await expect(sp.locator('[data-blocked="nominal"]')).toBeVisible();
+  await expect(sp.locator('[data-corner-migrated]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('choosing conditions on a bench with no nominal starts from a held condition and stays chosen', async ({
   page,
 }) => {

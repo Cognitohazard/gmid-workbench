@@ -409,9 +409,16 @@
     const b = cornersBefore;
     if (!b) return undefined;
     const nowBase = baseKey ?? nominalKey;
-    const now = runWords(keys, nowBase);
+    // Several conditions and nowhere to size the design: nothing is evaluated until one is set.
+    const unsized = keys.length > 1 && nowBase === undefined;
+    const now = unsized
+      ? `nothing: ${keys.map(condLabel).join(', ')} are asked about, but no condition is set as the base the design is sized at — choose one under "sized at" in the corner selection`
+      : runWords(keys, nowBase);
+    // Nothing before and nothing now is no change.
     if (b.ran === 'none-chosen')
-      return { before: 'nothing: no condition was chosen, so the panel did not evaluate', now };
+      return keys.length && !unsized
+        ? { before: 'nothing: no condition was chosen, so the panel did not evaluate', now }
+        : undefined;
     if (b.ran === 'active-unrecorded')
       return {
         before: "the active table's condition, which the stored bench does not record",
