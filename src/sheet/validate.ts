@@ -2253,7 +2253,7 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
             location: name,
             about: { kind: 'entry', field: 'set', key: k, problem: 'unknown-name' },
           });
-        } else if (engineSolved(p) || holds(p)) {
+        } else if (!axisEligible(p)) {
           out.push({
             rule: 'sheet-range',
             severity: 'error',

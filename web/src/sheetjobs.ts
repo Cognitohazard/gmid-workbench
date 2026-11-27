@@ -35,8 +35,8 @@ import {
  *  - `run`: the verdict — every asked condition, through `runConditions`;
  *  - `sweep`: the 1-D margin chart at one condition — the design sized there at every sample, or,
  *    given a different `base`, sized at `base` and held there (`sweepAtCondition`);
- *  - `sweep2`: the 2-D feasibility map at one condition;
- *  Both check the operating range only when `range` says so (the panel's switch, off by default).
+ *  - `sweep2`: the 2-D feasibility map at one condition — like `sweep`, it checks the operating
+ *    range only when `range` says so (the panel's switch, off by default);
  *  - `sens`: the sensitivity readout at one condition — how each check and each result moves with
  *    each decision of the designer;
  *  - `props`: how each result leans on each small-signal property of each device, at one

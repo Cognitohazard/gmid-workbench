@@ -95,6 +95,7 @@
     lineText,
     incompleteText,
   } from '@gmid/mostab-core';
+  import { untrack } from 'svelte';
   import { describeBinding, deviceLabel, type Bench } from './families';
   import { tableUid, verdictLoss } from './dashboard';
   import { PALETTE, type ChartData } from './chart';
@@ -869,7 +870,12 @@
   function setConditionMode(mode: string): void {
     if (mode === 'all') setSelection({ conditions: 'all' });
     else if (mode === 'base') setSelection({ conditions: [] });
-    else setSelection({ conditions: baseKey ? [baseKey] : [] });
+    else {
+      // Choosing starts from the condition the design is sized at, or the first held one when no
+      // condition is the nominal, so the list is never empty and the choice holds.
+      const first = baseKey ?? conditions[0];
+      setSelection({ conditions: first ? [first] : [] });
+    }
   }
   const toggleCondition = (key: ConditionKey): void =>
     setSelection({
@@ -904,8 +910,9 @@
     if (!axes.length) delete next.operatingAxes;
     onChange(next);
   }
-  /** Whether the designer opened the range editor: kept, so a re-render does not close it. */
-  let rangeOpen = $state(false);
+  /** Whether the range editor is open: open at first when the sheet declares axes, then the
+   *  designer's to open and close. */
+  let rangeOpen = $state(untrack(() => ownAxes.length > 0));
   function addAxis(): void {
     const free = axisChoices.find((n) => !ownAxes.some((a) => a.param === n));
     if (!free) return;
@@ -1124,9 +1131,9 @@
   // The chart is drawn at ONE condition: the one asked about, or — with several on the page —
   // the one picked beside the sweep control, the condition the design is sized at until another
   // is picked. Where the design is sized at that condition, each sample re-sizes it there with the
-  // knob at its value. Where the panel holds the nominal design at it (several conditions, or the
-  // hold mode of a single one), each sample sizes the design at the nominal condition with the
-  // knob at its value and holds it there, so the curves are that one design's margins at the
+  // knob at its value. Where the panel holds a design at it (sized at the base, another
+  // condition), each sample sizes the design at the base with the knob at its value and holds it
+  // there, so the curves are that one design's margins at the
   // condition — the same question the condition rows answer, asked along the knob. A condition
   // that was not evaluated has no design to sweep and draws nothing; its row says why.
   let sweepPick = $state<string | null>(null);
@@ -2501,7 +2508,7 @@
     <details
       class="srange"
       data-range-editor
-      open={rangeOpen || ownAxes.length > 0}
+      open={rangeOpen}
       ontoggle={(e) => (rangeOpen = (e.currentTarget as HTMLDetailsElement).open)}
     >
       <summary title={CONTROL_HELP.rangeEditor}
@@ -3024,7 +3031,7 @@
     {:else if active && chartData && !twoD && swept}
       {@const at = condLabel(swept.key)}
       <!-- Which of the two curves this is: the design sized at the chart's condition at every
-         sample, or the nominal design held there. -->
+         sample, or the design sized at the base and held there. -->
       {#if curve}
         <div
           class="scap"
@@ -3035,7 +3042,7 @@
           The curve is <b>{curve.name}</b>{#if curve.unit}&nbsp;in {curve.unit}{/if} against
           <b>{active}</b>{#if sweptUnit}&nbsp;in {sweptUnit}{/if} at <b>{at}</b>, {swept.design ===
           'held'
-            ? 'with the nominal design held there'
+            ? `with the ${heldDesign} held there`
             : 'with the design sized at each sample'}. The curve has a gap where it reads a device
           that is read beyond its table, or a value the solve did not find.
         </div>
@@ -3044,7 +3051,7 @@
           margin (%) vs <b>{active}</b>{#if sweptUnit}
             ({sweptUnit}){/if} at <b>{at}</b> —
           {#if swept.design === 'held'}
-            the nominal design held there: each sample sizes the design at {condLabel(swept.base)} with
+            the {heldDesign} held there: each sample sizes the design at {condLabel(swept.base)} with
             {active} at that value and holds it at {at} — widths, lengths, currents and gate biases fixed
             — so the curves are that design’s margins at {at}{#if swept.range === 'checked'}, its
               own range ends included{/if}.

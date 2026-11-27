@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { confirmImport } from './helpers';
 
 // The bench's corner selection and the operating-range editor: what the designer types is what is
@@ -90,6 +91,16 @@ test('range editor: two typed axes give four corners, named on their chips, kept
   await expect(sp2.locator(`[data-range-axis="${a}"] [data-axis-lo]`)).toHaveValue('0.8e0*1');
   await expect(sp2.locator(`[data-corner-axis="${b}"] input`)).not.toBeChecked();
   await expect(sp2.locator('[data-corner-count]')).toHaveText('6 corners');
+
+  // The editor opens on a sheet with axes, then stays as the designer leaves it: closed, a change
+  // elsewhere on the panel does not reopen it.
+  const editor2 = sp2.locator('[data-range-editor]');
+  await expect(editor2).toHaveAttribute('open', '');
+  await editor2.locator('summary').click();
+  await sp2.locator(`[data-corner-axis="${b}"] input`).check();
+  await expect(sp2.locator('[data-corner-count]')).toHaveText('10 corners');
+  await expect(editor2).not.toHaveAttribute('open', '');
+  await editor2.locator('summary').click();
 
   // Dropping both axes leaves no range: the document carries none.
   const drops = sp2.locator('[data-axis-drop]');
@@ -270,5 +281,31 @@ test('a bench stored with the old per-panel corner fields loads into the one sel
   sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('[data-corner-conditions]')).toHaveValue('base');
   await expect(sp2.locator('.scond')).toHaveText('at tt');
+  expect(errors).toEqual([]);
+});
+
+test('choosing conditions on a bench with no nominal starts from a held condition and stays chosen', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await page.goto('/');
+  // Two slow-corner tables and no typical one: nothing designates a nominal.
+  const ss = readFileSync(`${FIX}/demo-ss.mostab.csv`, 'utf8');
+  const hot = ss.replace('# temp: -40', '# temp: 125');
+  await page.locator('.load input[type=file]').setInputFiles([
+    { name: 'ss-cold.mostab.csv', mimeType: 'text/csv', buffer: Buffer.from(ss) },
+    { name: 'ss-hot.mostab.csv', mimeType: 'text/csv', buffer: Buffer.from(hot) },
+  ]);
+  await confirmImport(page);
+  await page.locator('.devices .fam .dev .dname').first().click();
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  const editor = sp.locator('[data-range-editor]');
+  await editor.locator('summary').click();
+  await editor.locator('[data-axis-add]').click();
+  const corners = sp.locator('[data-corners]');
+  await corners.locator('[data-corner-conditions]').selectOption('chosen');
+  await expect(corners.locator('[data-corner-conditions]')).toHaveValue('chosen');
+  await expect(corners.locator('[data-corner-condition] input').first()).toBeChecked();
   expect(errors).toEqual([]);
 });
