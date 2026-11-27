@@ -964,6 +964,11 @@ const axesOf = (doc: Pick<SheetDoc, 'operatingAxes'>): SheetAxis[] =>
     (a) => isObject(a) && typeof a.param === 'string',
   );
 
+/** Whether a param may be moved by an operating axis: a typed value of the sheet. A param the
+ *  engine solves, or one that carries `hold`, is worked out again at every corner, so a value an
+ *  axis gave it would be discarded. The one rule validation and the range editor share. */
+export const axisEligible = (p: SheetVar): boolean => !engineSolved(p) && !holds(p);
+
 /**
  * The axes in the order their ends can be evaluated: an axis after every axis whose param its `lo`
  * or `hi` reads, document order breaking ties. `cycle` names the axes, in reading order, that read

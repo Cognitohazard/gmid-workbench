@@ -1422,11 +1422,19 @@ test('operating range: chips report each range end; an end the solve cannot reac
   // demo's business — budgets are tuned for real tables — the report SHAPE is the contract.)
   const chips = sp.locator('.sedge');
   await expect(chips).toHaveCount(2);
-  // Each end is named by the quantity and value its `set` fixes and which end of the range it is,
-  // never by its bare name alone.
+  // Each end is named as the corner it is, the axis and its end at the value it takes; the
+  // tooltip adds which end of the range it is, never the bare name alone.
   await expect(chips.nth(0)).toHaveAttribute('data-range-end', 'CM_dc=lo');
-  await expect(chips.nth(0)).toContainText(/CM_dc = [\d.]+ m?V, the low end of the CM_dc axis/);
-  await expect(chips.nth(1)).toContainText(/CM_dc = [\d.]+ m?V, the high end of the CM_dc axis/);
+  await expect(chips.nth(0)).toContainText(/corner CM_dc low = [\d.]+ m?V/);
+  await expect(chips.nth(1)).toContainText(/corner CM_dc high = [\d.]+ m?V/);
+  await expect(chips.nth(0)).toHaveAttribute(
+    'title',
+    /CM_dc = [\d.]+ m?V, the low end of the CM_dc axis/,
+  );
+  await expect(chips.nth(1)).toHaveAttribute(
+    'title',
+    /CM_dc = [\d.]+ m?V, the high end of the CM_dc axis/,
+  );
 
   // The strip and the sweep legend both name the QUESTION a range end answers. A chip says
   // whether the held design complies at that end; the curve says by how much. Locked here
@@ -1444,6 +1452,8 @@ test('operating range: chips report each range end; an end the solve cannot reac
   await expect(chips.nth(0)).toHaveAttribute('data-verdict', 'non-compliant');
   await expect(chips.nth(1)).toHaveAttribute('data-verdict', 'undetermined');
   await sp.locator('.swsel select').selectOption('CM_dc');
+  // The range ends join the sweep only with its range-points switch on.
+  await sp.locator('[data-sweep-range]').check();
   // The sweep runs in the background and the chart lands when it is done.
   await expect(sp.locator('.pchart canvas')).toBeVisible({ timeout: 60_000 });
   await expect(sp.locator('.skey')).toContainText('margin at CM_dc = ', { timeout: 60_000 });

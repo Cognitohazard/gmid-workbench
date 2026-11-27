@@ -36,6 +36,7 @@ import {
  *  - `sweep`: the 1-D margin chart at one condition — the design sized there at every sample, or,
  *    given a different `base`, sized at `base` and held there (`sweepAtCondition`);
  *  - `sweep2`: the 2-D feasibility map at one condition;
+ *  Both check the operating range only when `range` says so (the panel's switch, off by default).
  *  - `sens`: the sensitivity readout at one condition — how each check and each result moves with
  *    each decision of the designer;
  *  - `props`: how each result leans on each small-signal property of each device, at one
@@ -52,6 +53,8 @@ export type SheetJob =
       at: ConditionKey;
       base?: ConditionKey;
       points: number;
+      /** Whether each sample is also asked at every point of the operating range. */
+      range: 'checked' | 'not-checked';
       settings: Settings;
     }
   | {
@@ -61,6 +64,8 @@ export type SheetJob =
       param2: string;
       at: ConditionKey;
       points: number;
+      /** Whether each cell is also asked at every point of the operating range. */
+      range: 'checked' | 'not-checked';
       settings: Settings;
       /** One of the sheet's equations to keep at every cell (Sweep2Options.value). */
       value?: string;
@@ -122,13 +127,13 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
           points: job.points,
           settings,
           windows: true,
-          range: 'checked',
+          range: job.range,
         });
       const resolve = projectingResolver(deviceOf, job.at);
       const sweep = sweepSheet(job.doc, job.param, t, job.points, resolve, undefined, {
         settings,
         windows: true,
-        range: 'checked',
+        range: job.range,
       });
       return { ...sweep, key: job.at, base: job.at, design: 'sized' };
     }
@@ -143,7 +148,7 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
             job.points,
             projectingResolver(deviceOf, job.at),
             undefined,
-            { settings, ...(job.value ? { value: job.value } : {}) },
+            { settings, range: job.range, ...(job.value ? { value: job.value } : {}) },
           )
         : null;
     }

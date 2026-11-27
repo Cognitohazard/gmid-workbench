@@ -17,6 +17,7 @@ import {
   type ConditionDimension,
   type DeviceTable,
   type DeviceLookup,
+  type CornerSelection,
 } from '@gmid/mostab-core';
 import { tableUid } from './dashboard';
 import { TEMP_DIMENSION, dimensionRefusal } from './importscreen';
@@ -34,6 +35,9 @@ export interface Bench {
   readonly options: readonly { binding: string; label: string }[];
   readonly revision: string;
   readonly designate: (deviceUid: string, uid: string) => void;
+  /** Which conditions and range points every sheet on the bench asks about (Dashboard.corners). */
+  readonly corners: CornerSelection;
+  readonly setCorners: (selection: CornerSelection) => void;
 }
 
 /** The discriminator a composed child's `device` string carries when it names a DEVICE rather

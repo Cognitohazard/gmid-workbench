@@ -33,6 +33,7 @@
     type DeviceTable,
     type Grid,
     type SheetDoc,
+    type CornerSelection,
   } from '@gmid/mostab-core';
   import { axisUnit, baseUnit } from './labels';
   import Panel from './Panel.svelte';
@@ -66,6 +67,7 @@
     userSheets,
   } from './sheetlib.svelte';
   import {
+    DEFAULT_CORNERS,
     presetDashboard,
     persistedDashboard,
     sanitizeDashboard,
@@ -227,6 +229,10 @@
   // Cross-device identity warnings (a join grouping refused): bench-level, because no single
   // device can see the sibling it stayed apart from.
   const benchQA = $derived(validateDevices(devices));
+  // Null until the first device loads — the dashboard is seeded against a device
+  // (presetDashboard needs one). The saved layout in localStorage is
+  // restored at that point, so a customized dashboard still survives a reload.
+  let dashboard = $state<Dashboard | null>(null);
   const bench = $derived({
     devices,
     deviceOf,
@@ -236,6 +242,11 @@
     options: deviceOptions(devices),
     revision: deviceRevision(devices),
     designate,
+    // One corner selection for every sheet on the bench, stored with the layout.
+    corners: dashboard?.corners ?? DEFAULT_CORNERS,
+    setCorners: (c: CornerSelection) => {
+      if (dashboard) dashboard.corners = c;
+    },
   });
   // Position of a table in `tables` — the strip renders devices, but select/overlay/remove
   // still address the flat list.
@@ -384,10 +395,6 @@
   function keepLayout(): void {
     layoutLost = null;
   }
-  // Null until the first device loads — the dashboard is seeded against a device
-  // (presetDashboard needs one). The saved layout in localStorage is
-  // restored at that point, so a customized dashboard still survives a reload.
-  let dashboard = $state<Dashboard | null>(null);
   const activeTab = $derived(
     dashboard ? (dashboard.tabs[dashboard.activeTab] ?? dashboard.tabs[0]) : undefined,
   );
@@ -868,8 +875,8 @@
    * Apply the screen reopened on the loaded tables. A table whose condition changed takes its new
    * condition in place: its chip stays where it was, its stored copy is replaced by one under the
    * new identity (the old record is deleted only once the new one is written), the nominal
-   * designation that named it names it still, and a sheet's chosen conditions that named the old
-   * condition follow it — replaced by the new one when no table on the bench still holds the old,
+   * designation that named it names it still, and the bench's chosen conditions and base that
+   * named the old condition follow it — replaced by the new one when no table on the bench still holds the old,
    * joined by it when one does. A table given another device follows the same rules: the nominal
    * designation that named it moves with it to its new device unless that device already has
    * one (the old device's is dropped when it is left with no table), and a sheet block bound to
@@ -960,26 +967,31 @@
         primary?.deviceUid === m.was.deviceUid &&
         !primary.keys.some((k) => sameCondition(k, conditionKeyOf(m.p.from.id))),
     );
+    // The bench's chosen conditions and its base follow a condition that changed.
+    const sel = dashboard?.corners;
+    if (dashboard && sel) {
+      let { conditions, base } = sel;
+      for (const p of plan) {
+        const from = conditionKeyOf(p.from.id);
+        const to = conditionKeyOf(p.to.id);
+        const held = next.some((d) => sameCondition(conditionKeyOf(d.table.id), from));
+        if (conditions !== 'all') conditions = followCornerKeys(conditions, from, to, held);
+        if (base && !held && sameCondition(conditionKeyOf(base), from)) base = to;
+      }
+      dashboard.corners = { ...sel, conditions, ...(base ? { base } : {}) };
+      const chosen = [...(conditions === 'all' ? [] : conditions), ...(base ? [base] : [])];
+      for (const m of lost)
+        if (chosen.some((k) => sameCondition(conditionKeyOf(k), conditionKeyOf(m.p.from.id))))
+          notes.push(
+            `the corner selection: its chosen condition ${conditionLabel(m.p.from.id)} is no longer in ${m.was.device} — that table now belongs to ${m.now.device}; choose again`,
+          );
+    }
     for (const tab of dashboard?.tabs ?? [])
       for (const panel of tab.panels) {
         if (panel.render !== 'sheet') continue;
         const name = `${panel.sheet?.title || 'untitled sheet'}" on tab "${tab.name}`;
-        for (const p of plan) {
-          const from = conditionKeyOf(p.from.id);
-          const to = conditionKeyOf(p.to.id);
-          if (panel.sheetCornerKeys) {
-            const held = next.some((d) => sameCondition(conditionKeyOf(d.table.id), from));
-            panel.sheetCornerKeys = followCornerKeys(panel.sheetCornerKeys, from, to, held);
-          }
-          notes.push(...boundBlocks(`sheet "${name}"`, panel.sheet, p));
-        }
+        for (const p of plan) notes.push(...boundBlocks(`sheet "${name}"`, panel.sheet, p));
         for (const m of moved) notes.push(...boundDevice(`sheet "${name}"`, panel.sheet, m));
-        const chosen = (panel.sheetCornerKeys ?? []).map(conditionKeyOf);
-        for (const m of lost)
-          if (chosen.some((k) => sameCondition(k, conditionKeyOf(m.p.from.id))))
-            notes.push(
-              `sheet "${name}": its chosen condition ${conditionLabel(m.p.from.id)} is no longer in ${m.was.device} — that table now belongs to ${m.now.device}; choose again`,
-            );
       }
     for (const lib of userSheets()) {
       for (const p of plan) notes.push(...boundBlocks(`library sheet "${lib.name}"`, lib.doc, p));

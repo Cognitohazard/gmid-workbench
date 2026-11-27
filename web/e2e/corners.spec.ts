@@ -231,7 +231,7 @@ test('staged import: one selection is one transaction — superseded, duplicated
   expect(errors).toEqual([]);
 });
 
-test('sheet panel: corner mode stamps every verdict and names what it could not evaluate', async ({
+test('sheet panel: the corner selection stamps every verdict and names what it could not evaluate', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -256,7 +256,7 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
 
   // Every condition: no bare verdict — the header states the aggregate over the set, and each
   // condition keeps its own answer beside its own label.
-  await sp.locator('[data-corner-mode]').selectOption('all');
+  await sp.locator('[data-corner-conditions]').selectOption('all');
   await expect(sp.locator('.scorntab tr')).toHaveCount(2);
   // One design across both: sized at the nominal condition, held at the other. The sized row
   // answers feasibility; the held row answers whether that same design complies there.
@@ -313,8 +313,10 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // design THERE — no table of conditions, the verdict stamped with ss, and the one-point tools
   // back. Holding the nominal design is what asking about several conditions means.
   await child.locator('.dsel').selectOption({ index: 0 });
-  await sp.locator('[data-corner-mode]').selectOption('active');
-  await condition(page, 'ss@-40', 'nmos_demo').locator('.dname').click();
+  await sp.locator('[data-corner-conditions]').selectOption('chosen');
+  await sp.locator('[data-corner-condition="ss@-40"] input').check();
+  await sp.locator('[data-corner-condition="tt"] input').uncheck();
+  await sp.locator('[data-corner-base]').selectOption({ label: 'ss@-40' });
   await expect(sp.locator('.scorntab')).toHaveCount(0);
   await expect(sp.locator('.scond')).toHaveText('at ss@-40');
   // Sized at a corner, the badge says so: this is not the nominal design.
@@ -326,8 +328,7 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // The other way to ask about one corner: hold the nominal design there. It is sized at tt and
   // held at ss — the same two rows several conditions give — and the badge says it is the nominal
   // design, held, with its answer there.
-  await expect(sp.locator('[data-corner-hold]')).toHaveValue('size');
-  await sp.locator('[data-corner-hold]').selectOption('hold');
+  await sp.locator('[data-corner-base]').selectOption({ index: 0 });
   await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant');
   await expect(sp.locator('[data-badge-stamp]')).toHaveText('the nominal design held at ss@-40');
   await expect(sp.locator('.scorntab tr')).toHaveCount(2);
@@ -337,7 +338,7 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await expect(sp.locator('.sstamp')).toContainText('sized at tt, held at ss@-40');
   // A knob ranking is about a design free to choose its widths, which a held one is not.
   await expect(sp.locator('.sensb')).toBeDisabled();
-  await sp.locator('[data-corner-hold]').selectOption('size');
+  await sp.locator('[data-corner-base]').selectOption({ label: 'ss@-40' });
   await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant');
   await expect(sp.locator('[data-badge-stamp]')).toHaveText('sized at ss@-40');
 
@@ -358,7 +359,7 @@ test('sheet panel: the badge over several conditions holds the verdict word of t
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
   await pickSheet(sp, '5T OTA');
-  await sp.locator('[data-corner-mode]').selectOption('all');
+  await sp.locator('[data-corner-conditions]').selectOption('all');
   await expect(sp.locator('[data-corner-row="tt"] .ccl')).toHaveText('✗ non-compliant', {
     timeout: 60_000,
   });
@@ -425,7 +426,7 @@ test('sheet panel: the worker is sent the tables a job evaluates, and the outlin
 
   // Every condition asked: the job carries the one table the worker does not hold yet, and no
   // outline — and the verdicts at both conditions are the ones the corner-mode test reads.
-  await sp.locator('[data-corner-mode]').selectOption('all');
+  await sp.locator('[data-corner-conditions]').selectOption('all');
   await expect(sp.locator('.scorntab tr')).toHaveCount(2);
   await expect(sp.locator('[data-corner-row="tt"] .ccl')).toHaveText('✓ feasible');
   await expect(sp.locator('[data-corner-row="ss@-40"] .ccl')).toHaveText('✗ does not comply');
@@ -447,10 +448,10 @@ test('sheet panel: a chosen condition that leaves is answered, not forgotten', a
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
-  await sp.locator('[data-corner-mode]').selectOption('chosen');
-  await expect(sp.locator('[data-blocked="chosen"]')).toBeVisible(); // no silent fallback
-  await sp.locator('.ckey', { hasText: 'tt' }).locator('input').check();
-  await sp.locator('.ckey', { hasText: 'ss@-40' }).locator('input').check();
+  // Chosen starts from the base, and the other condition joins it.
+  await sp.locator('[data-corner-conditions]').selectOption('chosen');
+  await expect(sp.locator('[data-corner-condition="tt"] input')).toBeChecked();
+  await sp.locator('[data-corner-condition="ss@-40"] input').check();
   await expect(sp.locator('.scorntab tr')).toHaveCount(2);
 
   // Removing the table behind a chosen condition leaves the choice standing: it is reported as
@@ -460,7 +461,7 @@ test('sheet panel: a chosen condition that leaves is answered, not forgotten', a
   await page.reload();
   const sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('[data-corner-row="ss@-40"]')).toContainText('not run');
-  await expect(sp2.locator('.ckey.absent', { hasText: 'ss@-40' })).toBeVisible();
+  await expect(sp2.locator('[data-corner-condition="ss@-40"].absent')).toBeVisible();
 
   expect(errors).toEqual([]);
 });
@@ -674,7 +675,7 @@ test('sheet panel: the sweep chart is drawn at one condition — sized there, or
 
   // Several conditions: still one chart, at the condition picked beside the sweep — the one the
   // design is sized at until another is picked. No curve per condition, no condition legend.
-  await sp.locator('[data-corner-mode]').selectOption('all');
+  await sp.locator('[data-corner-conditions]').selectOption('all');
   await expect(sp.locator('[data-sweep-at]')).toHaveValue(/tt/);
   await expect(caption).toHaveAttribute('data-sweep-design', 'sized');
   await expect(sp.locator('.skey')).not.toContainText('ss@-40');
@@ -686,24 +687,27 @@ test('sheet panel: the sweep chart is drawn at one condition — sized there, or
   );
   await expect(sp.locator('.feas')).toContainText('The held design is compliant for');
 
-  // One corner asked about alone: sized where asked by default, so the chart re-sizes there too;
-  // holding the nominal design there makes it the held chart.
-  await sp.locator('[data-corner-mode]').selectOption('active');
-  await condition(page, 'ss@-40').locator('.dname').click();
+  // One corner asked about alone and sized there: the chart re-sizes there too. Sized at the
+  // nominal and held there, it is the held chart.
+  await sp.locator('[data-corner-conditions]').selectOption('chosen');
+  await sp.locator('[data-corner-condition="ss@-40"] input').check();
+  await sp.locator('[data-corner-condition="tt"] input').uncheck();
+  await sp.locator('[data-corner-base]').selectOption({ label: 'ss@-40' });
   await expect(sp.locator('[data-badge-stamp]')).toHaveText('sized at ss@-40');
   await expect(caption).toHaveAttribute('data-sweep-design', 'sized', { timeout: 30_000 });
   await expect(caption).toContainText('each sample re-sizes the design at ss@-40');
-  await sp.locator('[data-corner-hold]').selectOption('hold');
+  await sp.locator('[data-corner-base]').selectOption({ index: 0 });
   await expect(sp.locator('[data-badge-stamp]')).toHaveText('the nominal design held at ss@-40');
   await expect(caption).toHaveAttribute('data-sweep-design', 'held', { timeout: 30_000 });
   await expect(caption).toContainText('holds it at ss@-40');
 
-  // The hold mode is bench state: it survives a reload.
+  // The selection is bench state: it survives a reload.
   await page.reload();
   await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
   await condition(page, 'ss@-40').locator('.dname').click();
   const sp2 = page.locator('.grid .panel').last();
-  await expect(sp2.locator('[data-corner-hold]')).toHaveValue('hold');
+  await expect(sp2.locator('[data-corner-condition="ss@-40"] input')).toBeChecked();
+  await expect(sp2.locator('[data-corner-base]')).toHaveValue('');
   await expect(sp2.locator('[data-badge-stamp]')).toHaveText('the nominal design held at ss@-40');
 
   await expect(sp2.locator('[data-sweep-caption]')).toHaveAttribute('data-sweep-design', 'held', {
