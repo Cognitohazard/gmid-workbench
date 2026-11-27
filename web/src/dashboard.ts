@@ -309,11 +309,15 @@ export interface Dashboard {
 }
 
 /** A new bench's selection: the base condition alone, at every range point of the sheet. */
-export const DEFAULT_CORNERS: CornerSelection = { conditions: [], axes: 'all', ends: 'all' };
+export const DEFAULT_CORNERS: CornerSelection = {
+  conditions: [],
+  excludeAxes: [],
+  excludeEnds: [],
+};
 
-/** Coerce an untrusted stored list of names (axes or named ends), or `'all'`. */
-function sanitizeNames(v: unknown): 'all' | string[] | undefined {
-  if (v === 'all') return 'all';
+/** Coerce an untrusted stored list of names (axes or named ends left out); absent is none. */
+function sanitizeNames(v: unknown): string[] | undefined {
+  if (v === undefined) return [];
   if (!Array.isArray(v)) return undefined;
   return [...new Set(v.filter((x): x is string => typeof x === 'string'))];
 }
@@ -335,16 +339,16 @@ function sanitizeCorners(v: unknown, lost?: string[]): CornerSelection {
         ? sanitizeConditionKeys(o.conditions)
         : undefined;
   if (conditions === undefined) lost?.push('corners.conditions');
-  const axes = sanitizeNames(o.axes);
-  if (axes === undefined) lost?.push('corners.axes');
-  const ends = sanitizeNames(o.ends);
-  if (ends === undefined) lost?.push('corners.ends');
+  const excludeAxes = sanitizeNames(o.excludeAxes);
+  if (excludeAxes === undefined) lost?.push('corners.excludeAxes');
+  const excludeEnds = sanitizeNames(o.excludeEnds);
+  if (excludeEnds === undefined) lost?.push('corners.excludeEnds');
   const base = o.base === undefined ? undefined : sanitizeConditionKey(o.base);
   if (o.base !== undefined && !base) lost?.push('corners.base');
   return {
     conditions: conditions ?? DEFAULT_CORNERS.conditions,
-    axes: axes ?? 'all',
-    ends: ends ?? 'all',
+    excludeAxes: excludeAxes ?? [],
+    excludeEnds: excludeEnds ?? [],
     ...(base ? { base } : {}),
   };
 }

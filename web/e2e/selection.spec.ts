@@ -76,6 +76,9 @@ test('range editor: two typed axes give four corners, named on their chips, kept
   await expect(corners.locator('[data-corner-count]')).toHaveText('5 corners');
   await corners.locator(`[data-corner-axis="${b}"] input`).uncheck();
   await expect(corners.locator('[data-corner-count]')).toHaveText('3 corners');
+  await expect(corners.locator('[data-corner-left-out]')).toHaveText(
+    `left out of the corners: ${b} ends`,
+  );
   await expect(chips).toHaveCount(2, { timeout: 30_000 });
   await corners.locator('[data-corner-conditions]').selectOption('all');
   await expect(corners.locator('[data-corner-count]')).toHaveText('6 corners');
@@ -307,5 +310,44 @@ test('choosing conditions on a bench with no nominal starts from a held conditio
   await corners.locator('[data-corner-conditions]').selectOption('chosen');
   await expect(corners.locator('[data-corner-conditions]')).toHaveValue('chosen');
   await expect(corners.locator('[data-corner-condition] input').first()).toBeChecked();
+  expect(errors).toEqual([]);
+});
+
+test('an axis added after another was left out counts, and the stored exclusion loads the same', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await page.goto('/');
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+  const { sp, editor, names } = await sheetWithAxes(page);
+  const [a, b] = names;
+  const corners = sp.locator('[data-corners]');
+  await corners.locator(`[data-corner-axis="${b}"] input`).uncheck();
+  await expect(corners.locator('[data-corner-count]')).toHaveText('3 corners');
+
+  // The bench stores what was left out, not what counts.
+  const stored = () =>
+    page.evaluate(() => JSON.parse(localStorage.getItem('gmid.dash.v3')!).corners);
+  await expect.poll(stored).toMatchObject({ excludeAxes: [b], excludeEnds: [] });
+
+  // A third axis is counted from the moment it is declared: 1 + 2 × 2 corners at the base.
+  await editor.locator('[data-axis-add]').click();
+  const rows = editor.locator('[data-range-axis]');
+  await expect(rows).toHaveCount(3);
+  const c = (await rows.nth(2).getAttribute('data-range-axis'))!;
+  await expect(corners.locator(`[data-corner-axis="${c}"] input`)).toBeChecked();
+  await expect(corners.locator(`[data-corner-axis="${a}"] input`)).toBeChecked();
+  await expect(corners.locator('[data-corner-count]')).toHaveText('5 corners');
+
+  // Reloaded, the stored exclusion reads the same.
+  await page.reload();
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+  const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator(`[data-corner-axis="${b}"] input`)).not.toBeChecked();
+  await expect(sp2.locator(`[data-corner-axis="${c}"] input`)).toBeChecked();
+  await expect(sp2.locator('[data-corner-count]')).toHaveText('5 corners');
+  await expect(sp2.locator('[data-corner-left-out]')).toHaveText(
+    `left out of the corners: ${b} ends`,
+  );
   expect(errors).toEqual([]);
 });

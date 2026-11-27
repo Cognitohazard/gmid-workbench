@@ -25,7 +25,6 @@
     axisOrder,
     axisEligible,
     selectionRun,
-    cornersOf,
     selectedRange,
     namingRangeEnds,
     worstPointByCheck,
@@ -883,21 +882,17 @@
         ? namedList.filter((k) => !sameCondition(k, key))
         : [...namedList, key],
     });
-  /** The operating axes and named range ends this sheet declares, each with whether the
-   *  selection counts it. A list naming every one of them is stored as 'all'. */
+  /** The operating axes and named range ends this sheet declares. The selection stores the ones
+   *  the designer left out, so an axis added later counts until it is left out in its turn. */
   const sheetAxes = $derived((rr.doc.operatingAxes ?? []).map((a) => a.param));
   const sheetEnds = $derived((rr.doc.operatingRange ?? []).map((e) => e.name));
-  const counts = (list: 'all' | readonly string[], name: string): boolean =>
-    list === 'all' || list.includes(name);
-  function toggleIn(
-    list: 'all' | readonly string[],
-    all: string[],
-    name: string,
-  ): 'all' | string[] {
-    const now = list === 'all' ? all : [...list];
-    const next = now.includes(name) ? now.filter((n) => n !== name) : [...now, name];
-    return all.every((n) => next.includes(n)) ? 'all' : next;
-  }
+  const toggleOut = (list: readonly string[], name: string): string[] =>
+    list.includes(name) ? list.filter((n) => n !== name) : [...list, name];
+  /** This sheet's axes and named ends the selection leaves out, said beside the count. */
+  const leftOut = $derived([
+    ...sheetAxes.filter((a) => selection.excludeAxes.includes(a)).map((a) => `${a} ends`),
+    ...sheetEnds.filter((n) => selection.excludeEnds.includes(n)),
+  ]);
   // ── The operating range editor. It writes operatingAxes, each end kept as the text typed, and
   // leaves the named ends as they are; the params it offers, the order and the count are the
   // core's (axisEligible, axisOrder, rangePoints), so the editor cannot disagree with the engine.
@@ -923,8 +918,8 @@
     setAxes(ownAxes.map((a, k) => (k === i ? { ...a, ...patch } : a)));
   const dropAxis = (i: number): void => setAxes(ownAxes.filter((_, k) => k !== i));
 
-  /** How many corners the selection asks about on this sheet (cornersOf). */
-  const cornerCount = $derived(primary ? cornersOf(primary, rr.doc, selection).length : 0);
+  /** How many corners the selection asks about on this sheet (cornersOf, through the run). */
+  const cornerCount = $derived(asked?.corners.length ?? 0);
   // The control appears once there is a choice to make, and stays visible whenever the selection
   // is not the default one: a saved selection the user cannot see is a setting they cannot undo.
   const showCornerCtl = $derived(
@@ -2617,8 +2612,8 @@
           <label class="ckey" data-corner-axis={a} title={CONTROL_HELP.cornerAxes}>
             <input
               type="checkbox"
-              checked={counts(selection.axes, a)}
-              onchange={() => setSelection({ axes: toggleIn(selection.axes, sheetAxes, a) })}
+              checked={!selection.excludeAxes.includes(a)}
+              onchange={() => setSelection({ excludeAxes: toggleOut(selection.excludeAxes, a) })}
             />{a} ends
           </label>
         {/each}
@@ -2626,14 +2621,19 @@
           <label class="ckey" data-corner-end={n} title={CONTROL_HELP.cornerEnds}>
             <input
               type="checkbox"
-              checked={counts(selection.ends, n)}
-              onchange={() => setSelection({ ends: toggleIn(selection.ends, sheetEnds, n) })}
+              checked={!selection.excludeEnds.includes(n)}
+              onchange={() => setSelection({ excludeEnds: toggleOut(selection.excludeEnds, n) })}
             />{n}
           </label>
         {/each}
         <span class="scount" data-corner-count
           >{cornerCount} {cornerCount === 1 ? 'corner' : 'corners'}</span
         >
+        {#if leftOut.length}
+          <span class="scount" data-corner-left-out
+            >left out of the corners: {leftOut.join(', ')}</span
+          >
+        {/if}
       </div>
     {/if}
 

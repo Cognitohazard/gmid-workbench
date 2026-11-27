@@ -15,22 +15,25 @@ import { rangePoints, type RangePoint, type SheetDoc } from '../sheet/types';
 import type { CharacterizedDevice } from './index';
 
 /**
- * What a bench asks about. Each list names what counts; `'all'` counts everything there is.
- *  - `conditions`: the characterization conditions. An empty list asks about the base alone.
- *  - `axes`: the operating axes (by param) whose two ends count. An axis left out stays at its
- *    design value, so two of four axes give 4 corners in place of 16.
- *  - `ends`: the named range ends (by name) that count.
+ * What a bench asks about.
+ *  - `conditions`: the characterization conditions; `'all'` counts every one the device holds.
+ *    An empty list asks about the base alone.
+ *  - `excludeAxes`: the operating axes (by param) the designer left out. Every other axis counts,
+ *    so an axis added later, or declared by another sheet, counts until the designer leaves it
+ *    out. An axis left out stays at its design value, so two of four axes give 4 corners in place
+ *    of 16.
+ *  - `excludeEnds`: the named range ends (by name) the designer left out; every other one counts.
  *  - `base`: where the design is sized; absent, the primary device's nominal condition.
  */
 export interface CornerSelection {
   readonly conditions: 'all' | readonly ConditionKey[];
-  readonly axes: 'all' | readonly string[];
-  readonly ends: 'all' | readonly string[];
+  readonly excludeAxes: readonly string[];
+  readonly excludeEnds: readonly string[];
   readonly base?: ConditionKey;
 }
 
 /** Every condition, every axis, every named end, sized at the nominal condition. */
-export const ALL_CORNERS: CornerSelection = { conditions: 'all', axes: 'all', ends: 'all' };
+export const ALL_CORNERS: CornerSelection = { conditions: 'all', excludeAxes: [], excludeEnds: [] };
 
 /** One corner: a condition alone (`point` absent), or a condition at one range point. */
 export interface Corner {
@@ -45,13 +48,12 @@ export interface Corner {
  * as it is.
  */
 export function selectedRange(doc: SheetDoc, selection: CornerSelection): SheetDoc {
-  const { axes, ends } = selection;
-  if (axes === 'all' && ends === 'all') return doc;
+  const { excludeAxes, excludeEnds } = selection;
   const { operatingAxes, operatingRange, ...rest } = doc;
-  const keptAxes =
-    axes === 'all' ? operatingAxes : operatingAxes?.filter((a) => axes.includes(a?.param));
-  const keptEnds =
-    ends === 'all' ? operatingRange : operatingRange?.filter((e) => ends.includes(e?.name));
+  const keptAxes = operatingAxes?.filter((a) => !excludeAxes.includes(a?.param));
+  const keptEnds = operatingRange?.filter((e) => !excludeEnds.includes(e?.name));
+  if (keptAxes?.length === operatingAxes?.length && keptEnds?.length === operatingRange?.length)
+    return doc;
   return {
     ...rest,
     ...(keptAxes?.length ? { operatingAxes: keptAxes } : {}),
@@ -111,10 +113,13 @@ export function cornersOf(
   ]);
 }
 
-/** What a corner run asks the engine: the sheet with its range cut to the selection, every
- *  condition named (a condition no table holds is answered as not evaluated, never dropped), and
- *  the base the design is sized at. The arguments `runConditions` takes. */
+/** What a corner run asks the engine: the corners cornersOf lists, the sheet with its range cut
+ *  to the selection, every condition named (a condition no table holds is answered as not
+ *  evaluated, never dropped), and the base the design is sized at. `doc`, `keys` and `base` are
+ *  the arguments `runConditions` takes. */
 export interface SelectionRun {
+  /** The corners the run answers, from cornersOf: the one place that decides them. */
+  readonly corners: readonly Corner[];
   readonly doc: SheetDoc;
   readonly keys: readonly ConditionKey[];
   readonly base?: ConditionKey;
@@ -122,13 +127,20 @@ export interface SelectionRun {
   readonly absent: readonly ConditionKey[];
 }
 
-/** The corner run of a selection (see SelectionRun). */
+/** The corner run of a selection (see SelectionRun), taken from cornersOf: the conditions run are
+ *  the corners' conditions, with each named condition no table holds kept in its place so it is
+ *  answered as not evaluated, and the range points are the corners' points, the range points of
+ *  the cut sheet the engine is given. */
 export function selectionRun(
   device: CharacterizedDevice | undefined,
   doc: SheetDoc,
   selection: CornerSelection,
 ): SelectionRun {
+  const corners = cornersOf(device, doc, selection);
   const { named, absent } = selectedConditions(device, selection);
+  const held = corners.filter((c) => !c.point).map((c) => c.key);
+  let next = 0;
+  const keys = named.map((k) => (absent.some((a) => sameCondition(a, k)) ? k : held[next++]));
   const base = baseOf(device, selection);
-  return { doc: selectedRange(doc, selection), keys: named, ...(base ? { base } : {}), absent };
+  return { corners, doc: selectedRange(doc, selection), keys, ...(base ? { base } : {}), absent };
 }

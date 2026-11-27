@@ -65,7 +65,11 @@ describe('the corner selection', () => {
   });
 
   it('two conditions, one of two axes and no named end give 2 × (1 + 2) = 6 corners, everywhere', () => {
-    const sel: CornerSelection = { conditions: [SS, TT], axes: ['V'], ends: [] };
+    const sel: CornerSelection = {
+      conditions: [SS, TT],
+      excludeAxes: ['S'],
+      excludeEnds: ['high-floor'],
+    };
     const corners = cornersOf(device, doc, sel);
     expect(corners.map((c) => `${label(c.key)} ${c.point?.name ?? ''}`)).toEqual([
       'ss@125 ',
@@ -121,7 +125,11 @@ describe('the corner selection', () => {
 
   it('a condition no table holds is listed as absent, and the others run', () => {
     const gone: ConditionKey = { corner: 'sf', temp: 27 };
-    const sel: CornerSelection = { conditions: [TT, gone, SS], axes: [], ends: [] };
+    const sel: CornerSelection = {
+      conditions: [TT, gone, SS],
+      excludeAxes: ['V', 'S'],
+      excludeEnds: ['high-floor'],
+    };
     const { held, absent } = selectedConditions(device, sel);
     expect(held).toEqual([TT, SS]);
     expect(absent).toEqual([gone]);
@@ -138,13 +146,13 @@ describe('the corner selection', () => {
   });
 
   it('an empty list of conditions asks about the base alone; a base of its own sizes there', () => {
-    const only = selectionRun(device, doc, { conditions: [], axes: 'all', ends: 'all' });
+    const only = selectionRun(device, doc, { conditions: [], excludeAxes: [], excludeEnds: [] });
     expect(only.keys).toEqual([TT]);
     expect(only.base).toEqual(TT);
     const there = selectionRun(device, doc, {
       conditions: [SS],
-      axes: 'all',
-      ends: 'all',
+      excludeAxes: [],
+      excludeEnds: [],
       base: SS,
     });
     expect(there.keys).toEqual([SS]);
@@ -160,6 +168,25 @@ describe('the corner selection', () => {
     expect(r.state === 'evaluated' && r.design).toBe('sized');
   });
 
+  it('the run takes its corners from cornersOf: the same list, and keys in the named order', () => {
+    const sel: CornerSelection = { conditions: [FF, SS], excludeAxes: ['V'], excludeEnds: [] };
+    const run = selectionRun(device, doc, sel);
+    expect(run.corners).toEqual(cornersOf(device, doc, sel));
+    expect(run.keys).toEqual([FF, SS]);
+  });
+
+  it('an axis the designer did not leave out counts, even one declared after the choice', () => {
+    // One exclusion stored on the bench; the sheet then gains a third axis.
+    const sel: CornerSelection = { conditions: [TT], excludeAxes: ['S'], excludeEnds: [] };
+    const grown: SheetDoc = {
+      ...doc,
+      operatingAxes: [...doc.operatingAxes!, { param: 'slack', lo: '0', hi: '1' }],
+    };
+    expect(selectedRange(grown, sel).operatingAxes?.map((a) => a.param)).toEqual(['V', 'slack']);
+    // 1 alone + 4 corners of two axes + the named end.
+    expect(cornersOf(device, grown, sel)).toHaveLength(6);
+  });
+
   it('a script on the same files and the same selection gives the same runs, key for key', () => {
     // The files the app would load: each condition written out and read back as text.
     const files = [TT, SS, FF].map((c) => toMostabCsv(retag(base, c)));
@@ -169,7 +196,11 @@ describe('the corner selection', () => {
       return res.dataset.tables[0];
     });
     const [read] = groupDevices(tables) as CharacterizedDevice[];
-    const sel: CornerSelection = { conditions: [FF, TT], axes: ['S'], ends: ['high-floor'] };
+    const sel: CornerSelection = {
+      conditions: [FF, TT],
+      excludeAxes: ['V'],
+      excludeEnds: [],
+    };
     const script = selectionRun(read, doc, sel);
     const scripted = runConditions(
       script.doc,
