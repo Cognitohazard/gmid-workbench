@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-import { loadDemo, loadDemoNoVsb, pickSheet } from './helpers';
+import { loadDemo, loadDemoNoVsb, pickSheet, confirmImport } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -127,6 +127,7 @@ test('device swap preserves the user’s tabs (an authored sheet is not wiped)',
   // sheet that survives is still a working one: it is sized on the new device and gives its
   // verdict there.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-half.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('header .device')).toContainText('nmos_half');
   await expect(page.locator('.grid .panel')).toHaveCount(6);
   const sp = page.locator('.grid .panel').last();
@@ -156,6 +157,7 @@ test('device swap keeps an EDITED canonical panel (editing clears its auto marke
   // Swap the device (load a DIFFERENT one): the canonical charts regenerate, but the edited (now
   // user-owned) table survives. Before the fix it kept auto:true and was deleted with the preset.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.grid .panel')).toHaveCount(6);
   await expect(page.locator('.grid .ptable')).toHaveCount(1);
 });
@@ -175,6 +177,7 @@ test('device swap respects a deleted Overview tab (no canonical panels misplaced
   // The surviving user tab is now at index 0. A device swap (load a DIFFERENT device) must NOT
   // inject the canonical panels into it (the old code assumed Overview was always tab 0).
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.grid .panel')).toHaveCount(0);
 });
 
@@ -269,6 +272,7 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   // accumulates and becomes active, so switch back to the demo (the cascode's defaults size
   // cleanly on it).
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-half.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.devices .dev')).toHaveCount(2);
   await page.locator('.devices .dev').first().locator('.dname').click(); // demo active
   await expect(page.locator('header .device')).toContainText('nmos_demo');
@@ -338,8 +342,10 @@ test('design sheet: two loaded devices sharing a label are each individually sel
   // not separate them: an undeclared namespace joins the sole declared candidate of the same
   // name (the re-export upgrade path), so a deliberate name collision must be declared on both.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample-fab.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.devices .dev')).toHaveCount(2); // demo + first import
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample-alt.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.devices .dev')).toHaveCount(3); // demo + two same-label nch_lvt
   await page.locator('.devices .dev').first().locator('.dname').click(); // demo active (sizes the parent)
 
@@ -638,6 +644,7 @@ test('design sheet: a nested block inherits its parent block’s device, and is 
   // A second device the leaf really sizes on, at half the current per unit width — the same
   // current needs twice the width there, so which device a block reads shows in its own numbers.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-half.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('.devices .dev')).toHaveCount(2);
   await page.locator('.devices .dev').first().locator('.dname').click(); // demo active
   await expect(page.locator('header .device')).toContainText('nmos_demo');
@@ -738,6 +745,7 @@ test('composed sheet: a signed-PMOS child with its sign param still +1 gets a ro
   await page.goto('/');
   await loadDemo(page);
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/pmos-demo.mostab.csv');
+  await confirmImport(page);
   await page.locator('.devices .dev').first().locator('.dname').click(); // NMOS active
 
   await page.getByRole('button', { name: '+ sheet' }).click();

@@ -4,7 +4,6 @@
 
 import type {
   Axis,
-  ConditionDimension,
   ConditionKey,
   ConditionValue,
   Dataset,
@@ -19,7 +18,7 @@ import type {
 } from '../types';
 import { ALIASES, passthroughKeys } from '../namespace';
 import { makeGrid, strides } from '../grid';
-import { DEFAULT_DIMENSIONS, dimensionName } from '../condition';
+import { DEFAULT_DIMENSIONS, asDimensionValue, dimensionName } from '../condition';
 import { DEFAULT_TEMP_C } from '../constants';
 
 // The canonical sweep-axis keys, in their conventional grid order
@@ -304,17 +303,6 @@ type ResolvedCondition =
       readonly left: readonly string[];
     }
   | { readonly ok: false; readonly errors: readonly ImportError[] };
-
-/** A header or hint value as a dimension of `kind` reads it, or undefined when it cannot. */
-function asDimensionValue(
-  v: ConditionValue | undefined,
-  kind: ConditionDimension['kind'],
-): ConditionValue | undefined {
-  if (v === undefined) return undefined;
-  if (kind === 'text') return String(v);
-  const n = typeof v === 'number' ? v : Number(String(v).trim());
-  return typeof v === 'string' && v.trim() === '' ? undefined : Number.isFinite(n) ? n : undefined;
-}
 
 /**
  * The table's condition, dimension by dimension: the import's hint, else the file's header, else

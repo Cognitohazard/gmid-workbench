@@ -11,11 +11,14 @@ import {
   conditionKeyOf,
   conditionLabel,
   conditionOf,
+  DEFAULT_DIMENSIONS,
   groupDevices,
   sameCondition,
   sanitizeConditionKey,
   tableAt,
   tableTempC,
+  withCondition,
+  withDevice,
 } from './index';
 import type { ConditionDimension, DeviceTable, ImportHints } from './types';
 
@@ -295,5 +298,111 @@ describe('a script importing files at named conditions', () => {
     ]);
     expect(d.duplicates).toEqual([]);
     expect(tableAt(d, { corner: 'ff', temp: 27, vdd: 1.8 })).toBe(tables[1]);
+  });
+});
+
+describe('a table given a new condition', () => {
+  const imported = (headers: Record<string, string | number>, hints?: ImportHints) =>
+    importOk(file(headers), hints).table;
+
+  it('returns a new table under the new condition, leaving the old one as it was', () => {
+    const old = imported({ device: 'n', corner: 'tt', temp: 27 });
+    const r = withCondition(old, { corner: 'tt_lv' });
+    if (!r.ok) throw new Error(r.error);
+    expect(conditionOf(r.table.id)).toEqual({ corner: 'tt_lv', temp: 27 });
+    expect(r.table.id.device).toBe('n');
+    expect(r.table.grid).toBe(old.grid);
+    expect(conditionOf(old.id)).toEqual({ corner: 'tt', temp: 27 });
+  });
+
+  it('changes nothing when nothing changes, down to how the table serializes', () => {
+    const cases: Record<string, string | number>[] = [
+      { device: 'n', corner: 'tt', temp: 27 },
+      { device: 'n' },
+    ];
+    for (const headers of cases) {
+      const old = imported(headers);
+      const r = withCondition(old, {}, DEFAULT_DIMENSIONS);
+      if (!r.ok) throw new Error(r.error);
+      expect(JSON.stringify(r.table.meta)).toBe(JSON.stringify(old.meta));
+      expect(JSON.stringify(r.table.id)).toBe(JSON.stringify(old.id));
+    }
+  });
+
+  it('counts a typed value as declared', () => {
+    const old = imported({ device: 'n' });
+    expect(old.meta.filled).toEqual(['corner', 'temp']);
+    const r = withCondition(old, { corner: 'ss', temp: '125' }, DEFAULT_DIMENSIONS);
+    if (!r.ok) throw new Error(r.error);
+    expect(conditionOf(r.table.id)).toEqual({ corner: 'ss', temp: 125 });
+    expect(r.table.meta.filled).toBeUndefined();
+    expect(r.table.meta.temp).toBe(125);
+    expect(tableTempC(r.table)).toBe(125);
+    expect(validate(r.table).some((w) => w.rule === 'no-temp')).toBe(false);
+  });
+
+  it('adds a dimension, clearing the warning that it was left out, and keeps the header', () => {
+    const old = imported({ device: 'n', corner: 'tt', temp: 27, vdd: 1.62 });
+    expect(conditionOf(old.id)).toEqual({ corner: 'tt', temp: 27 });
+    const left = withCondition(old, {}, CORNER_TEMP_VDD);
+    if (!left.ok) throw new Error(left.error);
+    expect(left.table.meta.unset).toEqual(['vdd']);
+    const r = withCondition(old, { vdd: '1.8' }, CORNER_TEMP_VDD);
+    if (!r.ok) throw new Error(r.error);
+    expect(conditionOf(r.table.id)).toEqual({ corner: 'tt', temp: 27, vdd: 1.8 });
+    expect(r.table.meta.unset).toBeUndefined();
+    expect(r.table.meta.extra?.vdd).toBe('1.62');
+  });
+
+  it('takes a dimension out, keeping an assumed temperature marked assumed', () => {
+    const old = imported({ device: 'n', corner: 'tt' });
+    const r = withCondition(old, { temp: null }, CORNER_ONLY);
+    if (!r.ok) throw new Error(r.error);
+    expect(conditionOf(r.table.id)).toEqual({ corner: 'tt' });
+    expect(r.table.meta.filled).toEqual(['temp']);
+    expect(tableTempC(r.table)).toBe(27);
+    const declared = imported({ device: 'n', corner: 'tt', temp: 125 });
+    const r2 = withCondition(declared, { temp: null }, CORNER_ONLY);
+    if (!r2.ok) throw new Error(r2.error);
+    expect(r2.table.meta.temp).toBe(125);
+    expect(r2.table.meta.filled).toBeUndefined();
+  });
+
+  it('converts a table stored in the older identity shape', () => {
+    const old = imported({ device: 'n', corner: 'tt', temp: 27 });
+    const legacy: DeviceTable = { ...old, id: { device: 'n', corner: 'tt', temp: 27 } };
+    const r = withCondition(legacy, { corner: 'ff' });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.table.id).toEqual({ device: 'n', condition: { corner: 'ff', temp: 27 } });
+  });
+
+  it('refuses a value that cannot name a condition', () => {
+    const t = imported({ device: 'n', corner: 'tt', temp: 27 });
+    expect(withCondition(t, { device: 'x' }).ok).toBe(false);
+    expect(withCondition(t, { ' ': 'x' }).ok).toBe(false);
+    expect(withCondition(t, { corner: '  ' }).ok).toBe(false);
+    expect(withCondition(t, { temp: 'hot' }).ok).toBe(false);
+    expect(withCondition(t, { temp: Infinity }).ok).toBe(false);
+    expect(withCondition(t, { vdd: 'high' }, CORNER_TEMP_VDD).ok).toBe(false);
+  });
+});
+
+describe('a table assigned to another device', () => {
+  it('keeps its condition and data, and the device is declared from then on', () => {
+    const old = importOk(file({ corner: 'ss', temp: 85 }), { filename: 'nch.csv' }).table;
+    expect(old.meta.filled).toEqual(['device']);
+    const r = withDevice(old, '  nmos_lvt ');
+    if (!r.ok) throw new Error(r.error);
+    expect(r.table.id.device).toBe('nmos_lvt');
+    expect(conditionOf(r.table.id)).toEqual(conditionOf(old.id));
+    expect(r.table.grid).toBe(old.grid);
+    expect(r.table.meta.filled).toBeUndefined();
+    expect(old.id.device).not.toBe('nmos_lvt');
+  });
+
+  it('refuses an empty name', () => {
+    const old = importOk(file({ device: 'n' })).table;
+    const r = withDevice(old, '   ');
+    expect(r.ok).toBe(false);
   });
 });

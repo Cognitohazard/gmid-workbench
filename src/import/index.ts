@@ -8,7 +8,7 @@
 // and raises no sign warnings; an UNDECLARED signed dump stays signed and QA warns.
 // Pure, deterministic, zero DOM imports.
 
-import type { ImportError, ImportHints, ImportResult, QAWarning } from '../types';
+import type { DeviceTable, ImportError, ImportHints, ImportResult, QAWarning } from '../types';
 import { mostabHeaderKeys, parseMostabCsv } from '../parse';
 import { REQUIRED_KEYS } from '../namespace';
 import { canonicalizeTable, validate } from '../qa';
@@ -54,11 +54,23 @@ export function importMostab(input: string | Uint8Array, hints?: ImportHints): I
   );
   if (errors.length) return { ok: false, errors };
 
-  // A dimension left out of a condition is a fact about the file, so its warning names the file.
-  const named = (w: QAWarning): QAWarning =>
-    w.rule === 'condition-left-out' && hints?.filename
-      ? { ...w, message: `${hints.filename}: ${w.message}` }
-      : w;
-  const warnings = [...parsed.dataset.warnings, ...tables.flatMap((t) => validate(t).map(named))];
+  const warnings = [
+    ...parsed.dataset.warnings,
+    ...tables.flatMap((t) => validateFile(t, hints?.filename)),
+  ];
   return { ok: true, dataset: { tables, warnings } };
+}
+
+/**
+ * A table's QA as its import reports it: `validate`, with each warning that a condition
+ * dimension was left out naming the file, since that is a fact about the file. For a table whose
+ * condition was changed after it was read (`withCondition`), the same findings its file would
+ * have raised under that condition.
+ */
+export function validateFile(table: DeviceTable, filename?: string): QAWarning[] {
+  return validate(table).map((w) =>
+    w.rule === 'condition-left-out' && filename
+      ? { ...w, message: `${filename}: ${w.message}` }
+      : w,
+  );
 }

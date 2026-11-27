@@ -7,16 +7,19 @@
 // second definition of a device — only of how this app addresses one.
 
 import {
+  dimensionName,
   extraScalar,
   deviceIdentityOf,
   deviceUidOf,
   groupDevices,
   pdkOf,
   type CharacterizedDevice,
+  type ConditionDimension,
   type DeviceTable,
   type DeviceLookup,
 } from '@gmid/mostab-core';
 import { tableUid } from './dashboard';
+import { TEMP_DIMENSION, dimensionRefusal } from './importscreen';
 
 /**
  * What the bench hands a panel: the loaded devices, how to match a binding to one, which
@@ -38,7 +41,10 @@ export interface Bench {
  *  `deviceLookup`), and only this form is ever written. */
 const FAMILY_PREFIX = 'family:';
 
-const deviceBinding = (f: CharacterizedDevice): string => FAMILY_PREFIX + f.deviceUid;
+/** The binding a sheet writes for the device with this identity. */
+export const bindingOfDevice = (deviceUid: string): string => FAMILY_PREFIX + deviceUid;
+
+const deviceBinding = (f: CharacterizedDevice): string => bindingOfDevice(f.deviceUid);
 
 /**
  * Group the loaded tables, with the bench's designations and its table identity.
@@ -53,10 +59,12 @@ export function benchDevices(
   tables: readonly DeviceTable[],
   nominalByFamily: Readonly<Record<string, string>>,
   previous: readonly CharacterizedDevice[] = [],
+  dimensions?: readonly ConditionDimension[],
 ): readonly CharacterizedDevice[] {
   const next = groupDevices(tables, {
     nominalByDevice: new Map(Object.entries(nominalByFamily)),
     uidOf: tableUid,
+    dimensions,
   });
   const kept = new Map(previous.map((f) => [deviceSignature(f), f]));
   const merged = next.map((f) => kept.get(deviceSignature(f)) ?? f);
@@ -188,6 +196,9 @@ export interface Registry {
    *  NOT dropped: it reads as an unresolved designation, so a bench that lost the table it
    *  named says so instead of quietly designating a different corner. */
   nominalByFamily: Record<string, string>;
+  /** The bench's condition dimensions, as the import screen last left them; absent until the
+   *  designer changes them, when the defaults (corner and temperature) apply. */
+  dimensions?: ConditionDimension[];
 }
 
 export const REGISTRY_VERSION = 2;
@@ -202,11 +213,45 @@ export function parseRegistry(raw: unknown): Registry | null {
   if (nom && typeof nom === 'object' && !Array.isArray(nom))
     for (const [k, v] of Object.entries(nom)) if (typeof v === 'string') nominalByFamily[k] = v;
   const active = o.active;
+  const dimensions = parseDimensions(o.dimensions);
   return {
     order: order as string[],
     active: typeof active === 'number' && Number.isFinite(active) ? Math.trunc(active) : 0,
     nominalByFamily,
+    ...(dimensions ? { dimensions } : {}),
   };
+}
+
+/** A stored dimension list, read defensively: every entry a named text or number dimension, no
+ *  name twice, never `device`, and a `temp` only as a number. Anything else reads as no list, so
+ *  the defaults apply rather than a half-read one. */
+function parseDimensions(raw: unknown): ConditionDimension[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: ConditionDimension[] = [];
+  for (const d of raw as unknown[]) {
+    if (!d || typeof d !== 'object') return undefined;
+    const { name, kind, unit, fill } = d as Record<string, unknown>;
+    if (typeof name !== 'string' || (kind !== 'text' && kind !== 'number')) return undefined;
+    const n = dimensionName(name);
+    if (dimensionRefusal(n, kind, out)) return undefined;
+    // The importer reads a table's temperature at its default when it declares none, whatever
+    // the list.
+    if (n === 'temp') {
+      out.push(TEMP_DIMENSION);
+      continue;
+    }
+    const fillOk =
+      kind === 'text'
+        ? typeof fill === 'string'
+        : typeof fill === 'number' && Number.isFinite(fill);
+    out.push({
+      name: n,
+      kind,
+      ...(typeof unit === 'string' ? { unit } : {}),
+      ...(fillOk ? { fill: fill as string | number } : {}),
+    });
+  }
+  return out;
 }
 
 /**

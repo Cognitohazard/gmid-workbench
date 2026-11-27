@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { loadDemo, strip } from './helpers';
+import { loadDemo, strip, confirmImport } from './helpers';
 
 // Where a loaded table lives: stored in this browser (IndexedDB) so a reload restores it, or held
 // for this session only and never written to browser storage. These tests read IndexedDB itself,
@@ -48,6 +48,7 @@ test('retention: a session-only import is never stored and is gone after a reloa
   // Session only: untick the box, then import.
   await keep.uncheck();
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await confirmImport(page);
   const session = chip(page, 'nch_lvt');
   await expect(session.locator('[data-retention]')).toHaveText('session only');
   await expect(session.locator('[data-retention]')).toHaveAttribute('title', /gone after a reload/);

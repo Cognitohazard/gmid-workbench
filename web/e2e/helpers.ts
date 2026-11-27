@@ -23,6 +23,7 @@ export const strip = (page: Page) => page.locator('nav[aria-label="loaded device
 // the sheets declare.
 export async function loadDemo(page: Page) {
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('header .device')).toContainText('nmos_demo');
 }
 
@@ -32,7 +33,16 @@ export async function loadDemo(page: Page) {
 // whose source sits above its body is refused.
 export async function loadDemoNoVsb(page: Page) {
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-no-vsb.mostab.csv');
+  await confirmImport(page);
   await expect(page.locator('header .device')).toContainText('nmos_demo');
+}
+
+/** Confirm the import screen a selection of tables opens, with the values it was opened with,
+ *  and wait for it to close: the tables join the bench only then. */
+export async function confirmImport(page: Page) {
+  const screen = page.locator('[data-import-screen="new"]');
+  await screen.locator('[data-import-confirm]').click();
+  await expect(screen).toHaveCount(0);
 }
 
 // Load a sheet into a SheetPanel from its grouped picker by title. Match the title as a
