@@ -558,6 +558,7 @@
         restoreLost={cfg.sheetLost}
         unrestored={!cfg.sheet}
         restoreStored={cfg.sheetStored}
+        cornersBefore={cfg.cornersBefore}
         sweep={cfg.sheetSweep ?? ''}
         sweep2={cfg.sheetSweep2 ?? ''}
         {bench}
@@ -565,6 +566,7 @@
         onChange={(s) => onChange({ sheet: s })}
         onSweep={(s) => onChange({ sheetSweep: s })}
         onSweep2={(s) => onChange({ sheetSweep2: s })}
+        onDismissCornersBefore={() => onChange({ cornersBefore: undefined })}
       />
     {:else}
       <p class="perr">this panel has no sheet</p>

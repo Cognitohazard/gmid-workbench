@@ -287,6 +287,116 @@ test('a bench stored with the old per-panel corner fields loads into the one sel
   expect(errors).toEqual([]);
 });
 
+/** Rewrites the stored bench as an older build left it: no selection on the bench, and each sheet
+ *  panel, in order, holding the corner fields given for it. */
+const storeOldFields = (page: Page, perPanel: Record<string, unknown>[]) =>
+  page.evaluate((per) => {
+    const dash = JSON.parse(localStorage.getItem('gmid.dash.v3')!);
+    delete dash.corners;
+    let i = 0;
+    for (const tab of dash.tabs as { panels: Record<string, unknown>[] }[])
+      for (const p of tab.panels) if (p.render === 'sheet') Object.assign(p, per[i++] ?? {});
+    localStorage.setItem('gmid.dash.v3', JSON.stringify(dash));
+  }, perPanel);
+
+const sheetPanels = (page: Page) =>
+  page.locator('.grid .panel').filter({ has: page.locator('[data-range-editor]') });
+
+/** Two tables loaded (tt and ss) and `n` sheet panels added at tt. */
+async function benchWithSheets(page: Page, n: number) {
+  await page.goto('/');
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+  await condition(page, 'tt').locator('.dname').click();
+  for (let i = 0; i < n; i++) await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(sheetPanels(page)).toHaveCount(n);
+  await expect(sheetPanels(page).last().locator('[data-corners]')).toBeVisible();
+}
+
+const reloadBench = async (page: Page) => {
+  await page.reload();
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+};
+
+test('a stored bench whose panels chose differently runs every condition any of them ran, and says so', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await benchWithSheets(page, 2);
+  const ss = { corner: 'ss', temp: -40 };
+  await storeOldFields(page, [
+    { sheetCornerMode: 'all' },
+    { sheetCornerMode: 'chosen', sheetCornerKeys: [ss] },
+  ]);
+  await reloadBench(page);
+  const [first, second] = [sheetPanels(page).first(), sheetPanels(page).last()];
+  // The union: every condition, so the panel that ran them all checks no less than it did.
+  await expect(first.locator('[data-corner-conditions]')).toHaveValue('all');
+  await expect(first.locator('.scorntab tr')).toHaveCount(2);
+  await expect(second.locator('.scorntab tr')).toHaveCount(2);
+  // The panel whose run is unchanged says nothing; the one that sized at ss says what changed.
+  await expect(first.locator('[data-corner-migrated]')).toHaveCount(0);
+  const note = second.locator('[data-corner-migrated]');
+  await expect(note.locator('[data-corner-before]')).toHaveText('ss@-40, sized at ss@-40');
+  await expect(note.locator('[data-corner-now]')).toHaveText('tt, ss@-40, sized at tt');
+  // Not the generic restore banner: the layout was read whole.
+  await expect(page.locator('[data-layout-lost]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('a stored panel that followed the active table runs at the condition the bench recorded, or at the nominal with a note', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await benchWithSheets(page, 1);
+  // The stored bench records ss as the active table.
+  await condition(page, 'ss@-40').locator('.dname').click();
+  await storeOldFields(page, [{ sheetCornerMode: 'active' }]);
+  await reloadBench(page);
+  let sp = sheetPanels(page).last();
+  await expect(sp.locator('[data-corner-condition="ss@-40"] input')).toBeChecked();
+  await expect(sp.locator('[data-badge-stamp]')).toHaveText('sized at ss@-40');
+  // It ran there before too, so there is nothing to say.
+  await expect(sp.locator('[data-corner-migrated]')).toHaveCount(0);
+
+  // A stored bench that does not record the active table: the nominal, and the note says so.
+  await storeOldFields(page, [{ sheetCornerMode: 'active' }]);
+  await page.evaluate(() => localStorage.removeItem('gmid.devreg'));
+  await reloadBench(page);
+  sp = sheetPanels(page).last();
+  await expect(sp.locator('[data-corner-conditions]')).toHaveValue('base');
+  await expect(sp.locator('.scond')).toHaveText('at tt');
+  const note = sp.locator('[data-corner-migrated]');
+  await expect(note.locator('[data-corner-before]')).toHaveText(
+    "the active table's condition, which the stored bench does not record",
+  );
+  await expect(note.locator('[data-corner-now]')).toHaveText('tt, sized at tt');
+  expect(errors).toEqual([]);
+});
+
+test('a stored panel that chose no condition runs the nominal, and the note stays until dismissed', async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await benchWithSheets(page, 1);
+  await storeOldFields(page, [{ sheetCornerMode: 'chosen', sheetCornerKeys: [] }]);
+  await reloadBench(page);
+  const sp = sheetPanels(page).last();
+  await expect(sp.locator('.scond')).toHaveText('at tt');
+  const note = sp.locator('[data-corner-migrated]');
+  await expect(note.locator('[data-corner-before]')).toContainText('no condition was chosen');
+  await expect(note.locator('[data-corner-now]')).toHaveText('tt, sized at tt');
+  await page.screenshot({ path: `${SCREENS}/corners-migrated-note.png` });
+  // It stays across a reload until the user dismisses it, and a dismissal stays dismissed.
+  await reloadBench(page);
+  await expect(sheetPanels(page).last().locator('[data-corner-migrated]')).toBeVisible();
+  await sheetPanels(page).last().locator('[data-corner-migrated-dismiss]').click();
+  await expect(sheetPanels(page).last().locator('[data-corner-migrated]')).toHaveCount(0);
+  await reloadBench(page);
+  await expect(sheetPanels(page).last().locator('.scond')).toHaveText('at tt');
+  await expect(sheetPanels(page).last().locator('[data-corner-migrated]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('choosing conditions on a bench with no nominal starts from a held condition and stays chosen', async ({
   page,
 }) => {

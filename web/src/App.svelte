@@ -71,6 +71,7 @@
     presetDashboard,
     persistedDashboard,
     sanitizeDashboard,
+    type RestoreContext,
     reseatDashboard,
     canPlot,
     deviceKey,
@@ -373,6 +374,18 @@
   // (keepLayout). A loss read from the earlier slot is said without holding anything: that slot
   // is never written.
   let layoutLost = $state<{ lost: string[]; held: boolean } | null>(null);
+  /** What a stored layout from before the bench held one corner selection is read against: the
+   *  condition of the table the stored registry records as active, when that table is loaded, and
+   *  the nominal condition of the device being opened. */
+  const restoreContext = (dev: DeviceTable): RestoreContext => {
+    const activeUid = bootReg?.order[bootReg.active];
+    const active = tables.find((t) => tableUid(t.table) === activeUid)?.table;
+    const nominal = deviceOf(tableUid(dev))?.nominal;
+    return {
+      ...(active ? { active: conditionKeyOf(active.id) } : {}),
+      ...(nominal ? { nominal: conditionKeyOf(nominal.id) } : {}),
+    };
+  };
   const loadDashboard = (dev: DeviceTable): Dashboard => {
     const restore = (key: string): { dash: Dashboard | null; lost: string[] } | undefined => {
       const stored = readJSON(key);
@@ -380,7 +393,7 @@
       if ('corrupt' in stored)
         return { dash: null, lost: ['the stored layout is not text this build can read'] };
       const lost: string[] = [];
-      const dash = sanitizeDashboard(stored.value, lost);
+      const dash = sanitizeDashboard(stored.value, lost, restoreContext(dev));
       if (!dash && !lost.length) lost.push('the stored layout is not a layout this build reads');
       return { dash, lost };
     };
@@ -1749,6 +1762,8 @@
             // swap instead of being regenerated away (reseatDashboard preserves non-auto panels).
             Object.assign(cfg, patch);
             if (cfg.auto) cfg.auto = false;
+            // A dismissed note of what a stored bench ran before is gone, not kept as undefined.
+            if ('cornersBefore' in patch && !patch.cornersBefore) delete cfg.cornersBefore;
             // An edited sheet is the user's document from now on: the stored copy a lossy restore
             // kept in its place (and the record of the loss) give way to it.
             if (patch.sheet !== undefined && cfg.sheetLost) {

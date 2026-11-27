@@ -96,7 +96,7 @@
   } from '@gmid/mostab-core';
   import { untrack } from 'svelte';
   import { describeBinding, deviceLabel, type Bench } from './families';
-  import { tableUid, verdictLoss } from './dashboard';
+  import { tableUid, verdictLoss, type CornersBefore } from './dashboard';
   import { PALETTE, type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
@@ -119,11 +119,13 @@
     restoreLost = undefined,
     unrestored = false,
     restoreStored = undefined,
+    cornersBefore = undefined,
     bench,
     styleVersion = 0,
     onChange,
     onSweep,
     onSweep2,
+    onDismissCornersBefore = () => {},
   }: {
     cfg: SheetDoc;
     sweep?: string;
@@ -138,11 +140,15 @@
     /** The document exactly as it was stored, while a restore loss is recorded: what the panel
      *  exports in place of the restored copy, so an export never writes the loss either. */
     restoreStored?: unknown;
+    /** What this panel ran on a bench stored before the bench held one corner selection, until
+     *  the user dismisses the note that compares it with what the panel runs now. */
+    cornersBefore?: CornersBefore;
     bench: Bench;
     styleVersion?: number;
     onChange: (s: SheetDoc) => void;
     onSweep: (s: string) => void;
     onSweep2: (s: string) => void;
+    onDismissCornersBefore?: () => void;
   } = $props();
 
   // A document in a format this app does not read is kept as it was stored and shown only as the
@@ -372,6 +378,52 @@
   const holding = $derived(
     single !== undefined && baseKey !== undefined && !sameCondition(single, baseKey),
   );
+  /** What this panel ran before the bench held one selection, as the conditions it asked about
+   *  and the one it sized at — undefined where that run was nothing, or cannot be told — and what
+   *  it runs now. A stored bench whose runs change says so beside the selection (cornersChange). */
+  const ranBefore = $derived.by(() => {
+    const b = cornersBefore;
+    if (!b || b.ran === 'none-chosen' || b.ran === 'active-unrecorded') return undefined;
+    const ks: readonly ConditionKey[] =
+      b.ran === 'nominal'
+        ? nominalKey
+          ? [nominalKey]
+          : []
+        : b.ran === 'all'
+          ? conditions
+          : b.ran === 'chosen'
+            ? b.keys
+            : [b.key];
+    const hold = (b.ran === 'chosen' || b.ran === 'active') && b.hold;
+    const one = ks.length === 1 ? ks[0] : undefined;
+    const sizedThere = one && !(hold && nominalKey && !sameCondition(one, nominalKey));
+    return { keys: ks, base: sizedThere ? one : nominalKey };
+  });
+  const runWords = (ks: readonly ConditionKey[], base: ConditionKey | undefined): string =>
+    `${ks.length ? ks.map(condLabel).join(', ') : 'no condition'}${base ? `, sized at ${condLabel(base)}` : ''}`;
+  const cornersChange = $derived.by((): { before: string; now: string } | undefined => {
+    const b = cornersBefore;
+    if (!b) return undefined;
+    const nowBase = baseKey ?? nominalKey;
+    const now = runWords(keys, nowBase);
+    if (b.ran === 'none-chosen')
+      return { before: 'nothing: no condition was chosen, so the panel did not evaluate', now };
+    if (b.ran === 'active-unrecorded')
+      return {
+        before: "the active table's condition, which the stored bench does not record",
+        now,
+      };
+    const was = ranBefore;
+    if (!was) return undefined;
+    const same = (a: readonly ConditionKey[], c: readonly ConditionKey[]) =>
+      a.length === c.length && a.every((k) => c.some((m) => sameCondition(k, m)));
+    const sameBase =
+      was.base === undefined || nowBase === undefined
+        ? was.base === nowBase
+        : sameCondition(was.base, nowBase);
+    if (same(was.keys, keys) && sameBase) return undefined;
+    return { before: runWords(was.keys, was.base), now };
+  });
   /** Why nothing can be evaluated, when nothing can be. `undesignated` must never fall back to
    *  the active table: "the device's nominal" is a designation, and quietly substituting whatever
    *  is selected would report a verdict about a condition nobody chose. */
@@ -2636,6 +2688,16 @@
         {/if}
       </div>
     {/if}
+    {#if cornersChange}
+      <!-- A stored bench from before the bench held one corner selection, whose run for this panel
+           changed when its panels' choices became the one selection: said, never silent. -->
+      <p class="smigrated" data-corner-migrated>
+        This bench was stored when each sheet panel chose its own conditions; its panels now share
+        one selection. Before, this panel ran <span data-corner-before>{cornersChange.before}</span
+        >; now it runs <span data-corner-now>{cornersChange.now}</span>.
+        <button data-corner-migrated-dismiss onclick={onDismissCornersBefore}>dismiss</button>
+      </p>
+    {/if}
 
     <!-- Nothing to evaluate. Each of these states says which choice is missing and offers the
        control that makes it — never a quiet substitution of some other condition. -->
@@ -3328,6 +3390,17 @@
   .ckey i {
     font-style: normal;
     opacity: 0.7;
+  }
+  /* What a stored bench ran before its panels shared one selection, and what it runs now. */
+  .smigrated {
+    margin: 0;
+    border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
+    border-radius: 5px;
+    padding: 0.3rem 0.5rem;
+    font-size: calc(0.78rem * var(--text-scale));
+  }
+  .smigrated span {
+    font-family: ui-monospace, monospace;
   }
   /* A condition that was refused, and why. Not a verdict colour: nothing was measured here. */
   .snotev {
